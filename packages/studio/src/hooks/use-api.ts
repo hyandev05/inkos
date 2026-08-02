@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { localizeKnownRuntimeMessage } from "../lib/error-copy";
+import { withAuthHeaders } from "../lib/studio-auth";
 
 const BASE = "/api/v1";
 const API_INVALIDATE_EVENT = "inkos:api-invalidate";
@@ -100,7 +101,8 @@ export async function fetchJson<T>(
   }
 
   const fetchImpl = deps?.fetchImpl ?? fetch;
-  const res = await fetchImpl(url, init);
+  const headers = withAuthHeaders(new Headers(init.headers));
+  const res = await fetchImpl(url, { ...init, headers });
 
   if (!res.ok) {
     throw new Error(await readErrorMessage(res));

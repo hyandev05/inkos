@@ -5,6 +5,8 @@
  * fetchUrl(): Fetch a specific URL and return plain text.
  */
 
+import { assertFetchUrlSafe } from "./proxy-fetch.js";
+
 export interface SearchResult {
   readonly title: string;
   readonly url: string;
@@ -67,6 +69,7 @@ export async function searchWeb(
  * HTML is stripped to plain text. Output is truncated to maxChars.
  */
 export async function fetchUrl(url: string, maxChars = 8000): Promise<string> {
+  await assertFetchUrlSafe(url);
   const res = await fetch(url, {
     headers: {
       "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",

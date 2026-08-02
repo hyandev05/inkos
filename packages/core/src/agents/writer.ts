@@ -1,4 +1,5 @@
 import { BaseAgent } from "./base.js";
+import { toEnCompatLanguage } from "../utils/language.js";
 import type { BookConfig } from "../models/book.js";
 import type { GenreProfile } from "../models/genre-profile.js";
 import type { BookRules } from "../models/book-rules.js";
@@ -159,24 +160,24 @@ export class WriterAgent extends BaseAgent {
       chapterSummaries, subplotBoard, emotionalArcs, characterMatrix, styleProfileRaw,
       parentCanon, fanficCanonRaw,
     ] = await Promise.all([
-        readStoryFrame(bookDir, placeholder),
-        readVolumeMap(bookDir, placeholder),
-        this.readFileOrDefault(join(bookDir, "story/style_guide.md")),
-        // Phase 5 consolidation: architect no longer emits an initial current_state
-        // section. When the file is only a seed placeholder, derive initial state
-        // from roles/*.Current_State + pending_hooks startChapter=0 rows so the
-        // writer still sees substantive content instead of a runtime-append note.
-        readCurrentStateWithFallback(bookDir, placeholder),
-        this.readFileOrDefault(join(bookDir, "story/particle_ledger.md")),
-        this.readFileOrDefault(join(bookDir, "story/pending_hooks.md")),
-        this.readFileOrDefault(join(bookDir, "story/chapter_summaries.md")),
-        this.readFileOrDefault(join(bookDir, "story/subplot_board.md")),
-        this.readFileOrDefault(join(bookDir, "story/emotional_arcs.md")),
-        readCharacterContext(bookDir, placeholder),
-        this.readFileOrDefault(join(bookDir, "story/style_profile.json")),
-        this.readFileOrDefault(join(bookDir, "story/parent_canon.md")),
-        this.readFileOrDefault(join(bookDir, "story/fanfic_canon.md")),
-      ]);
+      readStoryFrame(bookDir, placeholder),
+      readVolumeMap(bookDir, placeholder),
+      this.readFileOrDefault(join(bookDir, "story/style_guide.md")),
+      // Phase 5 consolidation: architect no longer emits an initial current_state
+      // section. When the file is only a seed placeholder, derive initial state
+      // from roles/*.Current_State + pending_hooks startChapter=0 rows so the
+      // writer still sees substantive content instead of a runtime-append note.
+      readCurrentStateWithFallback(bookDir, placeholder),
+      this.readFileOrDefault(join(bookDir, "story/particle_ledger.md")),
+      this.readFileOrDefault(join(bookDir, "story/pending_hooks.md")),
+      this.readFileOrDefault(join(bookDir, "story/chapter_summaries.md")),
+      this.readFileOrDefault(join(bookDir, "story/subplot_board.md")),
+      this.readFileOrDefault(join(bookDir, "story/emotional_arcs.md")),
+      readCharacterContext(bookDir, placeholder),
+      this.readFileOrDefault(join(bookDir, "story/style_profile.json")),
+      this.readFileOrDefault(join(bookDir, "story/parent_canon.md")),
+      this.readFileOrDefault(join(bookDir, "story/fanfic_canon.md")),
+    ]);
 
     const recentChapters = await this.loadRecentChapters(bookDir, chapterNumber);
     // Load more chapters for dialogue fingerprint extraction (voice consistency over longer span)
@@ -196,7 +197,11 @@ export class WriterAgent extends BaseAgent {
 
     const hasParentCanon = parentCanon !== "(文件尚未创建)";
     const hasFanficCanon = fanficCanonRaw !== "(文件尚未创建)";
-    const resolvedLanguage = book.language ?? genreProfile.language;
+    const rawLanguage = book.language ?? genreProfile.language;
+    const isViBook = rawLanguage === "vi";
+    // Prompt helpers only know zh/en; Vietnamese (Latin script) maps to en there.
+    // buildWriterSystemPrompt receives the raw language so its vi override applies.
+    const resolvedLanguage = toEnCompatLanguage(rawLanguage);
     const targetWords = input.lengthSpec?.target ?? input.wordCountOverride ?? book.chapterWordCount;
     const resolvedLengthSpec = input.lengthSpec ?? buildLengthSpec(targetWords, resolvedLanguage);
     const governedMemoryBlocks = input.contextPackage
@@ -204,77 +209,77 @@ export class WriterAgent extends BaseAgent {
       : undefined;
     const englishVarianceBrief = resolvedLanguage === "en"
       ? await buildEnglishVarianceBrief({
-          bookDir,
-          chapterNumber,
-        })
+        bookDir,
+        chapterNumber,
+      })
       : null;
 
     // Build fanfic context if fanfic_canon.md exists
     const fanficContext: FanficContext | undefined = hasFanficCanon && bookRules?.fanficMode
       ? {
-          fanficCanon: fanficCanonRaw,
-          fanficMode: bookRules.fanficMode,
-          allowedDeviations: bookRules.allowedDeviations ?? [],
-        }
+        fanficCanon: fanficCanonRaw,
+        fanficMode: bookRules.fanficMode,
+        allowedDeviations: bookRules.allowedDeviations ?? [],
+      }
       : undefined;
 
     // ── Phase 1: Creative writing (temperature 0.7) ──
     const creativeSystemPrompt = await this.withPromptPackGuidance(buildWriterSystemPrompt(
       book, genreProfile, bookRules, bookRulesBody, genreBody, styleGuide, styleFingerprint,
-      chapterNumber, "creative", fanficContext, resolvedLanguage,
+      chapterNumber, "creative", fanficContext, isViBook ? "vi" : resolvedLanguage,
       input.chapterMemo ? "governed" : "legacy",
       resolvedLengthSpec,
     ), "longform.writer");
 
     const creativeUserPrompt = input.chapterMemo && input.contextPackage && input.ruleStack
       ? this.buildGovernedUserPrompt({
-          chapterNumber,
-          chapterMemo: input.chapterMemo,
-          chapterIntentData: input.chapterIntentData,
-          contextPackage: input.contextPackage,
-          ruleStack: input.ruleStack,
-          externalContext: input.externalContext,
-          lengthSpec: resolvedLengthSpec,
-          language: book.language ?? genreProfile.language,
-          varianceBrief: englishVarianceBrief?.text,
-          selectedEvidenceBlock: this.joinGovernedEvidenceBlocks(governedMemoryBlocks),
-        })
+        chapterNumber,
+        chapterMemo: input.chapterMemo,
+        chapterIntentData: input.chapterIntentData,
+        contextPackage: input.contextPackage,
+        ruleStack: input.ruleStack,
+        externalContext: input.externalContext,
+        lengthSpec: resolvedLengthSpec,
+        language: resolvedLanguage,
+        varianceBrief: englishVarianceBrief?.text,
+        selectedEvidenceBlock: this.joinGovernedEvidenceBlocks(governedMemoryBlocks),
+      })
       : (() => {
-          // Smart context filtering: inject only relevant parts of truth files
-          const filteredHooks = filterHooks(hooks);
-          const filteredSummaries = filterSummaries(chapterSummaries, chapterNumber);
-          const filteredSubplots = filterSubplots(subplotBoard);
-          const filteredArcs = filterEmotionalArcs(emotionalArcs, chapterNumber);
-          const filteredMatrix = filterCharacterMatrix(characterMatrix, volumeOutline, bookRules?.protagonist?.name);
+        // Smart context filtering: inject only relevant parts of truth files
+        const filteredHooks = filterHooks(hooks);
+        const filteredSummaries = filterSummaries(chapterSummaries, chapterNumber);
+        const filteredSubplots = filterSubplots(subplotBoard);
+        const filteredArcs = filterEmotionalArcs(emotionalArcs, chapterNumber);
+        const filteredMatrix = filterCharacterMatrix(characterMatrix, volumeOutline, bookRules?.protagonist?.name);
 
-          // POV-aware filtering: limit context to what the POV character knows
-          const povCharacter = extractPOVFromOutline(volumeOutline, chapterNumber);
-          const povFilteredMatrix = povCharacter
-            ? filterMatrixByPOV(filteredMatrix, povCharacter)
-            : filteredMatrix;
-          const povFilteredHooks = povCharacter
-            ? filterHooksByPOV(filteredHooks, povCharacter, chapterSummaries)
-            : filteredHooks;
+        // POV-aware filtering: limit context to what the POV character knows
+        const povCharacter = extractPOVFromOutline(volumeOutline, chapterNumber);
+        const povFilteredMatrix = povCharacter
+          ? filterMatrixByPOV(filteredMatrix, povCharacter)
+          : filteredMatrix;
+        const povFilteredHooks = povCharacter
+          ? filterHooksByPOV(filteredHooks, povCharacter, chapterSummaries)
+          : filteredHooks;
 
-          return this.buildUserPrompt({
-            chapterNumber,
-            storyBible,
-            currentState,
-            ledger: genreProfile.numericalSystem ? ledger : "",
-            hooks: povFilteredHooks,
-            recentChapters,
-            lengthSpec: resolvedLengthSpec,
-            externalContext: input.externalContext,
-            chapterSummaries: filteredSummaries,
-            subplotBoard: filteredSubplots,
-            emotionalArcs: filteredArcs,
-            characterMatrix: povFilteredMatrix,
-            dialogueFingerprints,
-            relevantSummaries,
-            parentCanon: hasParentCanon ? parentCanon : undefined,
-            language: book.language ?? genreProfile.language,
-          });
-        })();
+        return this.buildUserPrompt({
+          chapterNumber,
+          storyBible,
+          currentState,
+          ledger: genreProfile.numericalSystem ? ledger : "",
+          hooks: povFilteredHooks,
+          recentChapters,
+          lengthSpec: resolvedLengthSpec,
+          externalContext: input.externalContext,
+          chapterSummaries: filteredSummaries,
+          subplotBoard: filteredSubplots,
+          emotionalArcs: filteredArcs,
+          characterMatrix: povFilteredMatrix,
+          dialogueFingerprints,
+          relevantSummaries,
+          parentCanon: hasParentCanon ? parentCanon : undefined,
+          language: resolvedLanguage,
+        });
+      })();
 
     const creativeTemperature = input.temperatureOverride ?? 0.7;
 
@@ -309,12 +314,12 @@ export class WriterAgent extends BaseAgent {
     const isGovernedSettlement = Boolean(input.chapterIntent && input.contextPackage && input.ruleStack);
     const filteredHooksForSettlement = isGovernedSettlement && input.contextPackage
       ? buildGovernedHookWorkingSet({
-          hooksMarkdown: hooks,
-          contextPackage: input.contextPackage,
-          chapterIntent: input.chapterIntent,
-          chapterNumber,
-          language: resolvedLanguage,
-        })
+        hooksMarkdown: hooks,
+        contextPackage: input.contextPackage,
+        chapterIntent: input.chapterIntent,
+        chapterNumber,
+        language: resolvedLanguage,
+      })
       : hooks;
     const filteredSubplotsForSettlement = isGovernedSettlement
       ? filterSubplots(subplotBoard)
@@ -324,11 +329,11 @@ export class WriterAgent extends BaseAgent {
       : emotionalArcs;
     const filteredMatrixForSettlement = isGovernedSettlement
       ? buildGovernedCharacterMatrixWorkingSet({
-          matrixMarkdown: characterMatrix,
-          chapterIntent: input.chapterIntent ?? volumeOutline,
-          contextPackage: input.contextPackage!,
-          protagonistName: bookRules?.protagonist?.name,
-        })
+        matrixMarkdown: characterMatrix,
+        chapterIntent: input.chapterIntent ?? volumeOutline,
+        contextPackage: input.contextPackage!,
+        protagonistName: bookRules?.protagonist?.name,
+      })
       : characterMatrix;
 
     const settleResult = await this.settle({
@@ -371,13 +376,13 @@ export class WriterAgent extends BaseAgent {
     const hookHealthIssues = resolvedRuntimeStateDelta
       && (runtimeStateArtifacts?.snapshot ?? settlement.runtimeStateSnapshot)
       ? analyzeHookHealth({
-          language: resolvedLanguage,
-          chapterNumber,
-          targetChapters: book.targetChapters,
-          hooks: (runtimeStateArtifacts?.snapshot ?? settlement.runtimeStateSnapshot)!.hooks.hooks,
-          delta: resolvedRuntimeStateDelta,
-          existingHookIds: [...priorHookIds],
-        })
+        language: resolvedLanguage,
+        chapterNumber,
+        targetChapters: book.targetChapters,
+        hooks: (runtimeStateArtifacts?.snapshot ?? settlement.runtimeStateSnapshot)!.hooks.hooks,
+        delta: resolvedRuntimeStateDelta,
+        existingHookIds: [...priorHookIds],
+      })
       : [];
 
     // ── Post-write validation (regex + rule-based, zero LLM cost) ──
@@ -479,7 +484,7 @@ export class WriterAgent extends BaseAgent {
     const { profile: genreProfile } = await readGenreProfile(this.ctx.projectRoot, input.book.genre);
     const parsedBookRules = await readBookRules(input.bookDir);
     const bookRules = parsedBookRules?.rules ?? null;
-    const resolvedLanguage = input.book.language ?? genreProfile.language;
+    const resolvedLanguage = toEnCompatLanguage(input.book.language ?? genreProfile.language);
     const governedMemoryBlocks = input.contextPackage
       ? buildGovernedMemoryEvidenceBlocks(input.contextPackage, resolvedLanguage)
       : undefined;
@@ -580,7 +585,7 @@ export class WriterAgent extends BaseAgent {
     usage: TokenUsage;
   }> {
     // Phase 2a: Observer — extract all facts from the chapter
-    const resolvedLang = params.book.language ?? params.genreProfile.language;
+    const resolvedLang = toEnCompatLanguage(params.book.language ?? params.genreProfile.language);
     const observerSystem = buildObserverSystemPrompt(params.book, params.genreProfile, resolvedLang);
     const observerUser = buildObserverUserPrompt(params.chapterNumber, params.title, params.content, resolvedLang);
 
@@ -607,11 +612,11 @@ export class WriterAgent extends BaseAgent {
     );
     const governedControlBlock = params.chapterIntent && params.contextPackage && params.ruleStack
       ? this.buildSettlerGovernedControlBlock(
-          params.chapterIntent,
-          params.contextPackage,
-          params.ruleStack,
-          resolvedLang,
-        )
+        params.chapterIntent,
+        params.contextPackage,
+        params.ruleStack,
+        resolvedLang,
+      )
       : undefined;
 
     const settlerUser = buildSettlerUserPrompt({
@@ -669,18 +674,18 @@ export class WriterAgent extends BaseAgent {
       const settlement = parseSettlementOutput(response.content, params.genreProfile);
       mergedSettlement = governedControlBlock
         ? {
-            ...settlement,
-            updatedHooks: mergeTableMarkdownByKey(params.originalHooks, settlement.updatedHooks, [0]),
-            updatedSubplots: settlement.updatedSubplots
-              ? mergeTableMarkdownByKey(params.originalSubplots, settlement.updatedSubplots, [0])
-              : settlement.updatedSubplots,
-            updatedEmotionalArcs: settlement.updatedEmotionalArcs
-              ? mergeTableMarkdownByKey(params.originalEmotionalArcs, settlement.updatedEmotionalArcs, [0, 1])
-              : settlement.updatedEmotionalArcs,
-            updatedCharacterMatrix: settlement.updatedCharacterMatrix
-              ? mergeCharacterMatrixMarkdown(params.originalCharacterMatrix, settlement.updatedCharacterMatrix)
-              : settlement.updatedCharacterMatrix,
-          }
+          ...settlement,
+          updatedHooks: mergeTableMarkdownByKey(params.originalHooks, settlement.updatedHooks, [0]),
+          updatedSubplots: settlement.updatedSubplots
+            ? mergeTableMarkdownByKey(params.originalSubplots, settlement.updatedSubplots, [0])
+            : settlement.updatedSubplots,
+          updatedEmotionalArcs: settlement.updatedEmotionalArcs
+            ? mergeTableMarkdownByKey(params.originalEmotionalArcs, settlement.updatedEmotionalArcs, [0, 1])
+            : settlement.updatedEmotionalArcs,
+          updatedCharacterMatrix: settlement.updatedCharacterMatrix
+            ? mergeCharacterMatrixMarkdown(params.originalCharacterMatrix, settlement.updatedCharacterMatrix)
+            : settlement.updatedCharacterMatrix,
+        }
         : settlement;
     }
 
@@ -916,8 +921,8 @@ ${lengthRequirementBlock}
     const contextSections = renderNarrativeSelectedContext(otherEntries, language);
     const userDirectionBlock = directionEntries.length > 0
       ? (language === "en"
-          ? `## User direction (overrides model defaults — must follow)\n${renderNarrativeSelectedContext(directionEntries, language)}\n`
-          : `## 用户方向（优先于模型默认，必须遵循）\n${renderNarrativeSelectedContext(directionEntries, language)}\n`)
+        ? `## User direction (overrides model defaults — must follow)\n${renderNarrativeSelectedContext(directionEntries, language)}\n`
+        : `## 用户方向（优先于模型默认，必须遵循）\n${renderNarrativeSelectedContext(directionEntries, language)}\n`)
       : "";
 
     const diagnosticLines = params.ruleStack.sections.diagnostic.length > 0
@@ -1083,15 +1088,15 @@ ${overrides}\n`;
 
     const required = language === "en"
       ? [
-          { needle: "Current task", label: "Current task" },
-          { needle: "Do not", label: "Do not" },
-          { needle: "end-of-chapter", label: "Required end-of-chapter change" },
-        ]
+        { needle: "Current task", label: "Current task" },
+        { needle: "Do not", label: "Do not" },
+        { needle: "end-of-chapter", label: "Required end-of-chapter change" },
+      ]
       : [
-          { needle: "当前任务", label: "当前任务" },
-          { needle: "不要做", label: "不要做" },
-          { needle: "章尾", label: "章尾必须发生的改变" },
-        ];
+        { needle: "当前任务", label: "当前任务" },
+        { needle: "不要做", label: "不要做" },
+        { needle: "章尾", label: "章尾必须发生的改变" },
+      ];
     const missing = required.filter((r) => !preWriteCheck.includes(r.needle)).map((r) => r.label);
 
     if (missing.length > 0) {
@@ -1248,9 +1253,9 @@ ${overrides}\n`;
       },
       chapterSummary: delta.chapterSummary
         ? {
-            ...delta.chapterSummary,
-            chapter: authoritativeChapterNumber,
-          }
+          ...delta.chapterSummary,
+          chapter: authoritativeChapterNumber,
+        }
         : undefined,
     };
   }

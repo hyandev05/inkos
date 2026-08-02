@@ -1,6 +1,7 @@
 import { readFile, readdir, mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { BaseAgent } from "./base.js";
+import { toEnCompatLanguage } from "../utils/language.js";
 import type { BookConfig } from "../models/book.js";
 import {
   ContextPackageSchema,
@@ -78,11 +79,12 @@ export async function composeGovernedChapter(input: ComposeChapterInput): Promis
   const storyDir = join(input.bookDir, "story");
   const runtimeDir = join(storyDir, "runtime");
   await mkdir(runtimeDir, { recursive: true });
+  const lang = toEnCompatLanguage(input.book.language);
 
   const selectedContext = await collectSelectedContext(
     storyDir,
     input.plan,
-    input.book.language ?? "zh",
+    lang,
     input.outlineSectionSelector,
   );
   const initialContextPackage = ContextPackageSchema.parse({
@@ -93,7 +95,7 @@ export async function composeGovernedChapter(input: ComposeChapterInput): Promis
     contextPackage: initialContextPackage,
     chapterNumber: input.chapterNumber,
     goal: input.plan.intent.goal,
-    language: input.book.language ?? "zh",
+    language: lang,
     contextBudget: input.contextBudget,
     compiler: input.compressibleContextCompiler,
     onContextCompression: input.onContextCompression,
@@ -339,34 +341,34 @@ export class ComposerAgent extends BaseAgent {
     ].join("\n")).join("\n\n");
     const system = isEn
       ? [
-          "You are InkOS's semantic outline-section selector.",
-          "Select only the outline sections needed for the current chapter. Prefer semantic relevance over keyword overlap.",
-          "Return strict JSON only: {\"selectedSources\":[\"...\"]}. Use exact source ids from the candidates. If uncertain, include the safest relevant anchors rather than inventing ids.",
-        ].join("\n")
+        "You are InkOS's semantic outline-section selector.",
+        "Select only the outline sections needed for the current chapter. Prefer semantic relevance over keyword overlap.",
+        "Return strict JSON only: {\"selectedSources\":[\"...\"]}. Use exact source ids from the candidates. If uncertain, include the safest relevant anchors rather than inventing ids.",
+      ].join("\n")
       : [
-          "你是 InkOS 的语义大纲选段器。",
-          "只选择当前章节真正需要的大纲段落。按语义相关性判断，不要按关键词重合机械选择。",
-          "只返回严格 JSON：{\"selectedSources\":[\"...\"]}。必须使用候选里的精确 source id；不确定时选最安全的相关锚点，不要编造 id。",
-        ].join("\n");
+        "你是 InkOS 的语义大纲选段器。",
+        "只选择当前章节真正需要的大纲段落。按语义相关性判断，不要按关键词重合机械选择。",
+        "只返回严格 JSON：{\"selectedSources\":[\"...\"]}。必须使用候选里的精确 source id；不确定时选最安全的相关锚点，不要编造 id。",
+      ].join("\n");
     const user = isEn
       ? [
-          `File: ${request.fileName}`,
-          `Chapter: ${request.chapterNumber}`,
-          `Goal: ${request.goal}`,
-          `Outline node: ${request.outlineNode}`,
-          "",
-          "Candidates:",
-          candidates,
-        ].join("\n")
+        `File: ${request.fileName}`,
+        `Chapter: ${request.chapterNumber}`,
+        `Goal: ${request.goal}`,
+        `Outline node: ${request.outlineNode}`,
+        "",
+        "Candidates:",
+        candidates,
+      ].join("\n")
       : [
-          `文件：${request.fileName}`,
-          `章节：第${request.chapterNumber}章`,
-          `目标：${request.goal}`,
-          `大纲节点：${request.outlineNode}`,
-          "",
-          "候选段落：",
-          candidates,
-        ].join("\n");
+        `文件：${request.fileName}`,
+        `章节：第${request.chapterNumber}章`,
+        `目标：${request.goal}`,
+        `大纲节点：${request.outlineNode}`,
+        "",
+        "候选段落：",
+        candidates,
+      ].join("\n");
     const response = await this.chat([
       { role: "system", content: system },
       { role: "user", content: user },
@@ -384,38 +386,38 @@ export class ComposerAgent extends BaseAgent {
     const compressibleBlock = renderContextEntries(request.compressibleEntries);
     const system = isEn
       ? [
-          "You are InkOS's semantic context compiler.",
-          "Only compile the COMPRESSIBLE CONTEXT. The PROTECTED CONTEXT is binding reference material and must not be rewritten, summarized as a substitute, or weakened.",
-          "Output concise Markdown with source pointers. Preserve names, unresolved promises, evidence, timing, and constraints that may affect the next chapter. Drop low-relevance noise.",
-        ].join("\n")
+        "You are InkOS's semantic context compiler.",
+        "Only compile the COMPRESSIBLE CONTEXT. The PROTECTED CONTEXT is binding reference material and must not be rewritten, summarized as a substitute, or weakened.",
+        "Output concise Markdown with source pointers. Preserve names, unresolved promises, evidence, timing, and constraints that may affect the next chapter. Drop low-relevance noise.",
+      ].join("\n")
       : [
-          "你是 InkOS 的语义上下文编译器。",
-          "只能编译【可压缩上下文】。【受保护上下文】是绑定参照，不得改写、不得替代总结、不得削弱。",
-          "输出简洁 Markdown，保留来源指针。保留会影响下一章的人名、未兑现承诺、证据、时间点和约束，丢弃低相关噪声。",
-        ].join("\n");
+        "你是 InkOS 的语义上下文编译器。",
+        "只能编译【可压缩上下文】。【受保护上下文】是绑定参照，不得改写、不得替代总结、不得削弱。",
+        "输出简洁 Markdown，保留来源指针。保留会影响下一章的人名、未兑现承诺、证据、时间点和约束，丢弃低相关噪声。",
+      ].join("\n");
     const user = isEn
       ? [
-          `Chapter: ${request.chapterNumber}`,
-          `Goal: ${request.goal}`,
-          `Target budget for compiled context: <= ${request.maxInputTokens} estimated input tokens`,
-          "",
-          "## Protected Context (reference only, do not compile)",
-          protectedBlock || "(none)",
-          "",
-          "## Compressible Context (compile this)",
-          compressibleBlock || "(none)",
-        ].join("\n")
+        `Chapter: ${request.chapterNumber}`,
+        `Goal: ${request.goal}`,
+        `Target budget for compiled context: <= ${request.maxInputTokens} estimated input tokens`,
+        "",
+        "## Protected Context (reference only, do not compile)",
+        protectedBlock || "(none)",
+        "",
+        "## Compressible Context (compile this)",
+        compressibleBlock || "(none)",
+      ].join("\n")
       : [
-          `章节：第${request.chapterNumber}章`,
-          `目标：${request.goal}`,
-          `压缩后目标预算：不超过 ${request.maxInputTokens} 估算输入 tokens`,
-          "",
-          "## 受保护上下文（只作为参照，不要编译它）",
-          protectedBlock || "（无）",
-          "",
-          "## 可压缩上下文（只编译这一部分）",
-          compressibleBlock || "（无）",
-        ].join("\n");
+        `章节：第${request.chapterNumber}章`,
+        `目标：${request.goal}`,
+        `压缩后目标预算：不超过 ${request.maxInputTokens} 估算输入 tokens`,
+        "",
+        "## 受保护上下文（只作为参照，不要编译它）",
+        protectedBlock || "（无）",
+        "",
+        "## 可压缩上下文（只编译这一部分）",
+        compressibleBlock || "（无）",
+      ].join("\n");
 
     const response = await this.chat([
       { role: "system", content: system },
@@ -445,131 +447,131 @@ async function collectSelectedContext(
   language: "zh" | "en",
   outlineSectionSelector?: OutlineSectionSelector,
 ): Promise<ContextPackage["selectedContext"]> {
-    const retrievalHints = deriveRetrievalHints(plan);
-    const memoBodyExcerpt = plan.memo.body.trim();
-    const chapterMemoEntry = memoBodyExcerpt.length > 0
-      ? [{
-          source: "runtime/chapter_memo",
-          reason: "Carry the planner's chapter memo into governed writing.",
-          excerpt: [
-            `goal=${plan.memo.goal}`,
-            plan.memo.isGoldenOpening ? "golden-opening=true" : undefined,
-            memoBodyExcerpt,
-          ].filter(Boolean).join(" | "),
-        }]
-      : [{
-          source: "runtime/chapter_memo",
-          reason: "Carry the planner's chapter memo into governed writing.",
-          excerpt: `goal=${plan.memo.goal}`,
-        }];
+  const retrievalHints = deriveRetrievalHints(plan);
+  const memoBodyExcerpt = plan.memo.body.trim();
+  const chapterMemoEntry = memoBodyExcerpt.length > 0
+    ? [{
+      source: "runtime/chapter_memo",
+      reason: "Carry the planner's chapter memo into governed writing.",
+      excerpt: [
+        `goal=${plan.memo.goal}`,
+        plan.memo.isGoldenOpening ? "golden-opening=true" : undefined,
+        memoBodyExcerpt,
+      ].filter(Boolean).join(" | "),
+    }]
+    : [{
+      source: "runtime/chapter_memo",
+      reason: "Carry the planner's chapter memo into governed writing.",
+      excerpt: `goal=${plan.memo.goal}`,
+    }];
 
-    const entries = await Promise.all([
-      maybeContextSource(
-        storyDir,
-        "current_focus.md",
-        "Current task focus for this chapter.",
-      ),
-      maybeContextSource(
-        storyDir,
-        "author_intent.md",
-        "User's long-term authorial intent and direction — binding, overrides model defaults.",
-      ),
-      maybeContextSource(
-        storyDir,
-        "audit_drift.md",
-        "Carry forward audit drift guidance from the previous chapter without polluting hard state facts.",
-      ),
-      maybeContextSource(
-        storyDir,
-        "current_state.md",
-        "Preserve hard state facts referenced by the active chapter brief or hard constraints.",
-      ),
-    ]);
-    const outlineEntries = [
-      ...await maybeOutlineSectionSources(
-        storyDir,
-        "outline/story_frame.md",
+  const entries = await Promise.all([
+    maybeContextSource(
+      storyDir,
+      "current_focus.md",
+      "Current task focus for this chapter.",
+    ),
+    maybeContextSource(
+      storyDir,
+      "author_intent.md",
+      "User's long-term authorial intent and direction — binding, overrides model defaults.",
+    ),
+    maybeContextSource(
+      storyDir,
+      "audit_drift.md",
+      "Carry forward audit drift guidance from the previous chapter without polluting hard state facts.",
+    ),
+    maybeContextSource(
+      storyDir,
+      "current_state.md",
+      "Preserve hard state facts referenced by the active chapter brief or hard constraints.",
+    ),
+  ]);
+  const outlineEntries = [
+    ...await maybeOutlineSectionSources(
+      storyDir,
+      "outline/story_frame.md",
       "Preserve canon constraints referenced by the active chapter brief or hard constraints.",
       plan,
       "story-frame",
       language,
       outlineSectionSelector,
     ),
-      ...await maybeOutlineSectionSources(
-        storyDir,
-        "outline/volume_map.md",
+    ...await maybeOutlineSectionSources(
+      storyDir,
+      "outline/volume_map.md",
       "Anchor the default planning node for this chapter.",
       plan,
       "volume-map",
       language,
       outlineSectionSelector,
     ),
-    ];
-    const canonEntries = await Promise.all([
-      maybeContextSource(
-        storyDir,
-        "parent_canon.md",
-        "Preserve parent canon constraints for governed continuation or fanfic writing.",
-      ),
-      maybeContextSource(
-        storyDir,
-        "fanfic_canon.md",
-        "Preserve extracted fanfic canon constraints for governed writing.",
-      ),
-    ]);
-    const trailEntries = await buildRecentChapterTrailEntries(storyDir, plan.intent.chapter);
-
-    const memorySelection = await retrieveMemorySelection({
-      bookDir: dirname(storyDir),
-      chapterNumber: plan.intent.chapter,
-      goal: plan.intent.goal,
-      outlineNode: plan.intent.outlineNode,
-      mustKeep: retrievalHints,
-    });
-    const hookDebtEntries = await buildHookDebtEntries(
+  ];
+  const canonEntries = await Promise.all([
+    maybeContextSource(
       storyDir,
-      plan,
-      memorySelection.activeHooks,
-      language,
-    );
+      "parent_canon.md",
+      "Preserve parent canon constraints for governed continuation or fanfic writing.",
+    ),
+    maybeContextSource(
+      storyDir,
+      "fanfic_canon.md",
+      "Preserve extracted fanfic canon constraints for governed writing.",
+    ),
+  ]);
+  const trailEntries = await buildRecentChapterTrailEntries(storyDir, plan.intent.chapter);
 
-    const summaryEntries = memorySelection.summaries.map((summary) => ({
-      source: `story/chapter_summaries.md#${summary.chapter}`,
-      reason: "Relevant episodic memory retrieved for the current chapter goal.",
-      excerpt: [summary.title, summary.events, summary.stateChanges, summary.hookActivity]
-        .filter(Boolean)
-        .join(" | "),
-    }));
-    const factEntries = memorySelection.facts.map((fact) => ({
-      source: `story/current_state.md#${toFactAnchor(fact.predicate)}`,
-      reason: "Relevant current-state fact retrieved for the current chapter goal.",
-      excerpt: `${fact.predicate} | ${fact.object}`,
-    }));
-    const hookEntries = memorySelection.hooks.map((hook) => ({
-      source: `story/pending_hooks.md#${hook.hookId}`,
-      reason: "Carry forward unresolved hooks that match the chapter focus.",
-      excerpt: [hook.type, hook.status, hook.expectedPayoff, hook.payoffTiming, hook.notes]
-        .filter(Boolean)
-        .join(" | "),
-    }));
-    const volumeSummaryEntries = memorySelection.volumeSummaries.map((summary) => ({
-      source: `story/volume_summaries.md#${summary.anchor}`,
-      reason: "Carry forward long-span arc memory compressed from earlier volumes.",
-      excerpt: `${summary.heading} | ${summary.content}`,
-    }));
+  const memorySelection = await retrieveMemorySelection({
+    bookDir: dirname(storyDir),
+    chapterNumber: plan.intent.chapter,
+    goal: plan.intent.goal,
+    outlineNode: plan.intent.outlineNode,
+    mustKeep: retrievalHints,
+  });
+  const hookDebtEntries = await buildHookDebtEntries(
+    storyDir,
+    plan,
+    memorySelection.activeHooks,
+    language,
+  );
 
-    return [
-      ...chapterMemoEntry,
-      ...entries.filter((entry): entry is NonNullable<typeof entry> => entry !== null),
-      ...outlineEntries,
-      ...canonEntries.filter((entry): entry is NonNullable<typeof entry> => entry !== null),
-      ...trailEntries,
-      ...hookDebtEntries,
-      ...factEntries,
-      ...summaryEntries,
-      ...volumeSummaryEntries,
-      ...hookEntries,
-    ];
+  const summaryEntries = memorySelection.summaries.map((summary) => ({
+    source: `story/chapter_summaries.md#${summary.chapter}`,
+    reason: "Relevant episodic memory retrieved for the current chapter goal.",
+    excerpt: [summary.title, summary.events, summary.stateChanges, summary.hookActivity]
+      .filter(Boolean)
+      .join(" | "),
+  }));
+  const factEntries = memorySelection.facts.map((fact) => ({
+    source: `story/current_state.md#${toFactAnchor(fact.predicate)}`,
+    reason: "Relevant current-state fact retrieved for the current chapter goal.",
+    excerpt: `${fact.predicate} | ${fact.object}`,
+  }));
+  const hookEntries = memorySelection.hooks.map((hook) => ({
+    source: `story/pending_hooks.md#${hook.hookId}`,
+    reason: "Carry forward unresolved hooks that match the chapter focus.",
+    excerpt: [hook.type, hook.status, hook.expectedPayoff, hook.payoffTiming, hook.notes]
+      .filter(Boolean)
+      .join(" | "),
+  }));
+  const volumeSummaryEntries = memorySelection.volumeSummaries.map((summary) => ({
+    source: `story/volume_summaries.md#${summary.anchor}`,
+    reason: "Carry forward long-span arc memory compressed from earlier volumes.",
+    excerpt: `${summary.heading} | ${summary.content}`,
+  }));
+
+  return [
+    ...chapterMemoEntry,
+    ...entries.filter((entry): entry is NonNullable<typeof entry> => entry !== null),
+    ...outlineEntries,
+    ...canonEntries.filter((entry): entry is NonNullable<typeof entry> => entry !== null),
+    ...trailEntries,
+    ...hookDebtEntries,
+    ...factEntries,
+    ...summaryEntries,
+    ...volumeSummaryEntries,
+    ...hookEntries,
+  ];
 }
 
 function deriveRetrievalHints(plan: PlanChapterOutput): string[] {
@@ -584,155 +586,155 @@ async function buildRecentChapterTrailEntries(
   storyDir: string,
   chapterNumber: number,
 ): Promise<ContextPackage["selectedContext"]> {
-    const content = await readFileOrDefault(join(storyDir, "chapter_summaries.md"));
-    if (!content || content === "(文件尚未创建)") {
-      return [];
-    }
+  const content = await readFileOrDefault(join(storyDir, "chapter_summaries.md"));
+  if (!content || content === "(文件尚未创建)") {
+    return [];
+  }
 
-    const recentSummaries = parseChapterSummariesMarkdown(content)
-      .filter((summary) => summary.chapter < chapterNumber)
-      .sort((left, right) => right.chapter - left.chapter)
-      .slice(0, 5);
-    if (recentSummaries.length === 0) {
-      return [];
-    }
+  const recentSummaries = parseChapterSummariesMarkdown(content)
+    .filter((summary) => summary.chapter < chapterNumber)
+    .sort((left, right) => right.chapter - left.chapter)
+    .slice(0, 5);
+  if (recentSummaries.length === 0) {
+    return [];
+  }
 
-    const entries: ContextPackage["selectedContext"] = [];
-    const recentTitles = recentSummaries
-      .map((summary) => [summary.chapter, summary.title].filter(Boolean).join(": "))
-      .filter(Boolean)
-      .join(" | ");
-    if (recentTitles) {
-      entries.push({
-        source: "story/chapter_summaries.md#recent_titles",
-        reason: "Keep recent title history visible to avoid repetitive chapter naming.",
-        excerpt: recentTitles,
-      });
-    }
+  const entries: ContextPackage["selectedContext"] = [];
+  const recentTitles = recentSummaries
+    .map((summary) => [summary.chapter, summary.title].filter(Boolean).join(": "))
+    .filter(Boolean)
+    .join(" | ");
+  if (recentTitles) {
+    entries.push({
+      source: "story/chapter_summaries.md#recent_titles",
+      reason: "Keep recent title history visible to avoid repetitive chapter naming.",
+      excerpt: recentTitles,
+    });
+  }
 
-    const moodTrail = recentSummaries
-      .filter((summary) => summary.mood || summary.chapterType)
-      .map((summary) => `${summary.chapter}: ${summary.mood || "(none)"} / ${summary.chapterType || "(none)"}`)
-      .join(" | ");
-    if (moodTrail) {
-      entries.push({
-        source: "story/chapter_summaries.md#recent_mood_type_trail",
-        reason: "Keep recent mood and chapter-type cadence visible before writing the next chapter.",
-        excerpt: moodTrail,
-      });
-    }
+  const moodTrail = recentSummaries
+    .filter((summary) => summary.mood || summary.chapterType)
+    .map((summary) => `${summary.chapter}: ${summary.mood || "(none)"} / ${summary.chapterType || "(none)"}`)
+    .join(" | ");
+  if (moodTrail) {
+    entries.push({
+      source: "story/chapter_summaries.md#recent_mood_type_trail",
+      reason: "Keep recent mood and chapter-type cadence visible before writing the next chapter.",
+      excerpt: moodTrail,
+    });
+  }
 
-    const endingTrail = await buildRecentEndingTrail(storyDir, chapterNumber);
-    if (endingTrail) {
-      entries.push({
-        source: "story/chapters#recent_endings",
-        reason: "Show how recent chapters ended so the writer avoids structural repetition (e.g. 3 consecutive collapse endings).",
-        excerpt: endingTrail,
-      });
-    }
+  const endingTrail = await buildRecentEndingTrail(storyDir, chapterNumber);
+  if (endingTrail) {
+    entries.push({
+      source: "story/chapters#recent_endings",
+      reason: "Show how recent chapters ended so the writer avoids structural repetition (e.g. 3 consecutive collapse endings).",
+      excerpt: endingTrail,
+    });
+  }
 
-    return entries;
+  return entries;
 }
 
 async function buildRecentEndingTrail(
   storyDir: string,
   chapterNumber: number,
 ): Promise<string | undefined> {
-    const chaptersDir = join(dirname(storyDir), "chapters");
-    try {
-      const files = await readdir(chaptersDir);
-      const chapterFiles = files
-        .filter((file) => file.endsWith(".md"))
-        .map((file) => ({ file, num: parseInt(file.slice(0, 4), 10) }))
-        .filter((entry) => Number.isFinite(entry.num) && entry.num < chapterNumber)
-        .sort((a, b) => b.num - a.num)
-        .slice(0, 3);
+  const chaptersDir = join(dirname(storyDir), "chapters");
+  try {
+    const files = await readdir(chaptersDir);
+    const chapterFiles = files
+      .filter((file) => file.endsWith(".md"))
+      .map((file) => ({ file, num: parseInt(file.slice(0, 4), 10) }))
+      .filter((entry) => Number.isFinite(entry.num) && entry.num < chapterNumber)
+      .sort((a, b) => b.num - a.num)
+      .slice(0, 3);
 
-      const endings: string[] = [];
-      for (const entry of chapterFiles.reverse()) {
-        const content = await readFile(join(chaptersDir, entry.file), "utf-8");
-        const lastLine = extractLastMeaningfulSentence(content);
-        if (lastLine) {
-          endings.push(`ch${entry.num}: ${lastLine}`);
-        }
+    const endings: string[] = [];
+    for (const entry of chapterFiles.reverse()) {
+      const content = await readFile(join(chaptersDir, entry.file), "utf-8");
+      const lastLine = extractLastMeaningfulSentence(content);
+      if (lastLine) {
+        endings.push(`ch${entry.num}: ${lastLine}`);
       }
-      return endings.length >= 2 ? endings.join(" | ") : undefined;
-    } catch {
-      return undefined;
     }
+    return endings.length >= 2 ? endings.join(" | ") : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function extractLastMeaningfulSentence(content: string): string | undefined {
-    const lines = content.split("\n").map((line) => line.trim()).filter((line) =>
-      line.length > 5 && !line.startsWith("#") && !line.startsWith("|") && !line.startsWith("==="),
-    );
-    const last = lines.at(-1);
-    if (!last) return undefined;
-    return last.length > 60 ? last.slice(0, 57) + "..." : last;
+  const lines = content.split("\n").map((line) => line.trim()).filter((line) =>
+    line.length > 5 && !line.startsWith("#") && !line.startsWith("|") && !line.startsWith("==="),
+  );
+  const last = lines.at(-1);
+  if (!last) return undefined;
+  return last.length > 60 ? last.slice(0, 57) + "..." : last;
 }
 
 async function buildHookDebtEntries(
   storyDir: string,
   plan: PlanChapterOutput,
   activeHooks: ReadonlyArray<{
-      readonly hookId: string;
-      readonly startChapter: number;
-      readonly type: string;
-      readonly status: string;
-      readonly lastAdvancedChapter: number;
-      readonly expectedPayoff: string;
-      readonly payoffTiming?: string;
-      readonly notes: string;
-    }>,
+    readonly hookId: string;
+    readonly startChapter: number;
+    readonly type: string;
+    readonly status: string;
+    readonly lastAdvancedChapter: number;
+    readonly expectedPayoff: string;
+    readonly payoffTiming?: string;
+    readonly notes: string;
+  }>,
   language: "zh" | "en",
 ): Promise<ContextPackage["selectedContext"]> {
-    const targetHookIds = [...new Set(plan.memo.threadRefs)];
-    if (targetHookIds.length === 0) {
+  const targetHookIds = [...new Set(plan.memo.threadRefs)];
+  if (targetHookIds.length === 0) {
+    return [];
+  }
+
+  const summaries = parseChapterSummariesMarkdown(
+    await readFileOrDefault(join(storyDir, "chapter_summaries.md")),
+  );
+
+  return targetHookIds.flatMap((hookId) => {
+    const hook = activeHooks.find((entry) => entry.hookId === hookId);
+    if (!hook) {
       return [];
     }
 
-    const summaries = parseChapterSummariesMarkdown(
-      await readFileOrDefault(join(storyDir, "chapter_summaries.md")),
-    );
+    const seedSummary = findHookSummary(summaries, hook.hookId, hook.startChapter, "seed");
+    const latestSummary = findHookSummary(summaries, hook.hookId, hook.lastAdvancedChapter, "latest");
+    const role = language === "en" ? "memo-referenced debt" : "备忘引用旧债";
+    const promise = hook.expectedPayoff || (language === "en" ? "(unspecified)" : "（未写明）");
+    const seedBeat = seedSummary
+      ? renderHookDebtBeat(seedSummary)
+      : (hook.notes || promise);
+    const latestBeat = latestSummary && latestSummary !== seedSummary
+      ? renderHookDebtBeat(latestSummary)
+      : undefined;
+    const age = Math.max(0, plan.intent.chapter - Math.max(1, hook.startChapter));
 
-    return targetHookIds.flatMap((hookId) => {
-      const hook = activeHooks.find((entry) => entry.hookId === hookId);
-      if (!hook) {
-        return [];
-      }
-
-      const seedSummary = findHookSummary(summaries, hook.hookId, hook.startChapter, "seed");
-      const latestSummary = findHookSummary(summaries, hook.hookId, hook.lastAdvancedChapter, "latest");
-      const role = language === "en" ? "memo-referenced debt" : "备忘引用旧债";
-      const promise = hook.expectedPayoff || (language === "en" ? "(unspecified)" : "（未写明）");
-      const seedBeat = seedSummary
-        ? renderHookDebtBeat(seedSummary)
-        : (hook.notes || promise);
-      const latestBeat = latestSummary && latestSummary !== seedSummary
-        ? renderHookDebtBeat(latestSummary)
-        : undefined;
-      const age = Math.max(0, plan.intent.chapter - Math.max(1, hook.startChapter));
-
-      return [{
-        source: `runtime/hook_debt#${hook.hookId}`,
-        reason: language === "en"
-          ? "Narrative debt brief with original seed text for this hook agenda target."
-          : "含原始种子文本的叙事债务简报。",
-        excerpt: language === "en"
-          ? [
-              `${hook.hookId} (${hook.type}, ${role}, open ${age} chapters)`,
-              `reader promise: ${promise}`,
-              `original seed (ch${hook.startChapter}): ${seedBeat}`,
-              latestBeat ? `latest turn (ch${hook.lastAdvancedChapter}): ${latestBeat}` : undefined,
-            ].filter(Boolean).join(" | ")
-          : [
-              `${hook.hookId}（${hook.type}，${role}，已开${age}章）`,
-              `读者承诺：${promise}`,
-              `种于第${hook.startChapter}章：${seedBeat}`,
-              latestBeat ? `推进于第${hook.lastAdvancedChapter}章：${latestBeat}` : undefined,
-            ].filter(Boolean).join(" | "),
-      }];
-    });
+    return [{
+      source: `runtime/hook_debt#${hook.hookId}`,
+      reason: language === "en"
+        ? "Narrative debt brief with original seed text for this hook agenda target."
+        : "含原始种子文本的叙事债务简报。",
+      excerpt: language === "en"
+        ? [
+          `${hook.hookId} (${hook.type}, ${role}, open ${age} chapters)`,
+          `reader promise: ${promise}`,
+          `original seed (ch${hook.startChapter}): ${seedBeat}`,
+          latestBeat ? `latest turn (ch${hook.lastAdvancedChapter}): ${latestBeat}` : undefined,
+        ].filter(Boolean).join(" | ")
+        : [
+          `${hook.hookId}（${hook.type}，${role}，已开${age}章）`,
+          `读者承诺：${promise}`,
+          `种于第${hook.startChapter}章：${seedBeat}`,
+          latestBeat ? `推进于第${hook.lastAdvancedChapter}章：${latestBeat}` : undefined,
+        ].filter(Boolean).join(" | "),
+    }];
+  });
 }
 
 async function maybeContextSource(
@@ -740,31 +742,31 @@ async function maybeContextSource(
   fileName: string,
   reason: string,
 ): Promise<ContextPackage["selectedContext"][number] | null> {
-    const path = join(storyDir, fileName);
-    let content = await readFileOrDefault(path);
-    let resolvedFileName = fileName;
+  const path = join(storyDir, fileName);
+  let content = await readFileOrDefault(path);
+  let resolvedFileName = fileName;
 
-    if ((!content || content === "(文件尚未创建)")) {
-      // Phase 5 back-compat: the new outline/ files may be absent on legacy
-      // books. Fall back to the deprecated paths transparently.
-      const legacyFallback = outlineFallback(fileName);
-      if (legacyFallback) {
-        const legacyPath = join(storyDir, legacyFallback);
-        const legacyContent = await readFileOrDefault(legacyPath);
-        if (legacyContent && legacyContent !== "(文件尚未创建)") {
-          content = legacyContent;
-          resolvedFileName = legacyFallback;
-        }
+  if ((!content || content === "(文件尚未创建)")) {
+    // Phase 5 back-compat: the new outline/ files may be absent on legacy
+    // books. Fall back to the deprecated paths transparently.
+    const legacyFallback = outlineFallback(fileName);
+    if (legacyFallback) {
+      const legacyPath = join(storyDir, legacyFallback);
+      const legacyContent = await readFileOrDefault(legacyPath);
+      if (legacyContent && legacyContent !== "(文件尚未创建)") {
+        content = legacyContent;
+        resolvedFileName = legacyFallback;
       }
     }
+  }
 
-    if (!content || content === "(文件尚未创建)") return null;
+  if (!content || content === "(文件尚未创建)") return null;
 
-    return {
-      source: `story/${resolvedFileName}`,
-      reason,
-      excerpt: content.trim(),
-    };
+  return {
+    source: `story/${resolvedFileName}`,
+    reason,
+    excerpt: content.trim(),
+  };
 }
 
 async function maybeOutlineSectionSources(
@@ -776,34 +778,34 @@ async function maybeOutlineSectionSources(
   language: "zh" | "en",
   outlineSectionSelector?: OutlineSectionSelector,
 ): Promise<ContextPackage["selectedContext"]> {
-    const path = join(storyDir, fileName);
-    const content = await readFileOrDefault(path);
+  const path = join(storyDir, fileName);
+  const content = await readFileOrDefault(path);
 
-    if (!content || content === "(文件尚未创建)") {
-      const legacyFallback = outlineFallback(fileName);
-      if (!legacyFallback) return [];
-      const legacyContent = await readFileOrDefault(join(storyDir, legacyFallback));
-      if (!legacyContent || legacyContent === "(文件尚未创建)") return [];
-      return await selectOutlineSectionEntries({
-        fileName: legacyFallback,
-        content: legacyContent,
-        reason,
-        plan,
-        kind,
-        language,
-        outlineSectionSelector,
-      });
-    }
-
+  if (!content || content === "(文件尚未创建)") {
+    const legacyFallback = outlineFallback(fileName);
+    if (!legacyFallback) return [];
+    const legacyContent = await readFileOrDefault(join(storyDir, legacyFallback));
+    if (!legacyContent || legacyContent === "(文件尚未创建)") return [];
     return await selectOutlineSectionEntries({
-      fileName,
-      content,
+      fileName: legacyFallback,
+      content: legacyContent,
       reason,
       plan,
       kind,
       language,
       outlineSectionSelector,
     });
+  }
+
+  return await selectOutlineSectionEntries({
+    fileName,
+    content,
+    reason,
+    plan,
+    kind,
+    language,
+    outlineSectionSelector,
+  });
 }
 
 async function selectOutlineSectionEntries(params: {
@@ -815,60 +817,60 @@ async function selectOutlineSectionEntries(params: {
   readonly language: "zh" | "en";
   readonly outlineSectionSelector?: OutlineSectionSelector;
 }): Promise<ContextPackage["selectedContext"]> {
-    const sections = splitMarkdownSections(params.content);
-    if (sections.length === 0) {
-      return [{
-        source: `story/${params.fileName}#document`,
-        reason: params.reason,
-        excerpt: params.content.trim(),
-      }];
-    }
-
-    const hints = deriveOutlineSelectionHints(params.plan);
-    const selected = sections.filter((section) =>
-      params.kind === "story-frame"
-        ? isRelevantStoryFrameSection(section, hints)
-        : isRelevantVolumeMapSection(section, hints, params.plan.intent.chapter),
-    );
-    const finalSections = selected.length > 0 ? selected : fallbackOutlineSections(sections, params.kind, params.plan.intent.chapter);
-    const candidates = sections.map((section) => ({
-      source: `story/${params.fileName}#${slugifyAnchor(section.heading)}`,
-      heading: section.heading,
-      excerpt: section.raw.trim(),
-    }));
-    if (params.outlineSectionSelector) {
-      try {
-        const selectedSources = await params.outlineSectionSelector({
-          fileName: params.fileName,
-          kind: params.kind,
-          chapterNumber: params.plan.intent.chapter,
-          goal: params.plan.intent.goal,
-          outlineNode: params.plan.intent.outlineNode ?? "",
-          language: params.language,
-          candidates,
-        });
-        const selectedSourceSet = new Set(selectedSources);
-        const llmSections = sections.filter((section) =>
-          selectedSourceSet.has(`story/${params.fileName}#${slugifyAnchor(section.heading)}`),
-        );
-        if (llmSections.length > 0) {
-          return dedupeBySource(llmSections.map((section) => ({
-            source: `story/${params.fileName}#${slugifyAnchor(section.heading)}`,
-            reason: params.reason,
-            excerpt: section.raw.trim(),
-          })));
-        }
-      } catch {
-        // Semantic section selection is quality guidance, not a hard dependency.
-        // If the provider flakes or returns malformed JSON, keep the deterministic
-        // fallback so chapter production does not stall.
-      }
-    }
-    return dedupeBySource(finalSections.map((section) => ({
-      source: `story/${params.fileName}#${slugifyAnchor(section.heading)}`,
+  const sections = splitMarkdownSections(params.content);
+  if (sections.length === 0) {
+    return [{
+      source: `story/${params.fileName}#document`,
       reason: params.reason,
-      excerpt: section.raw.trim(),
-    })));
+      excerpt: params.content.trim(),
+    }];
+  }
+
+  const hints = deriveOutlineSelectionHints(params.plan);
+  const selected = sections.filter((section) =>
+    params.kind === "story-frame"
+      ? isRelevantStoryFrameSection(section, hints)
+      : isRelevantVolumeMapSection(section, hints, params.plan.intent.chapter),
+  );
+  const finalSections = selected.length > 0 ? selected : fallbackOutlineSections(sections, params.kind, params.plan.intent.chapter);
+  const candidates = sections.map((section) => ({
+    source: `story/${params.fileName}#${slugifyAnchor(section.heading)}`,
+    heading: section.heading,
+    excerpt: section.raw.trim(),
+  }));
+  if (params.outlineSectionSelector) {
+    try {
+      const selectedSources = await params.outlineSectionSelector({
+        fileName: params.fileName,
+        kind: params.kind,
+        chapterNumber: params.plan.intent.chapter,
+        goal: params.plan.intent.goal,
+        outlineNode: params.plan.intent.outlineNode ?? "",
+        language: params.language,
+        candidates,
+      });
+      const selectedSourceSet = new Set(selectedSources);
+      const llmSections = sections.filter((section) =>
+        selectedSourceSet.has(`story/${params.fileName}#${slugifyAnchor(section.heading)}`),
+      );
+      if (llmSections.length > 0) {
+        return dedupeBySource(llmSections.map((section) => ({
+          source: `story/${params.fileName}#${slugifyAnchor(section.heading)}`,
+          reason: params.reason,
+          excerpt: section.raw.trim(),
+        })));
+      }
+    } catch {
+      // Semantic section selection is quality guidance, not a hard dependency.
+      // If the provider flakes or returns malformed JSON, keep the deterministic
+      // fallback so chapter production does not stall.
+    }
+  }
+  return dedupeBySource(finalSections.map((section) => ({
+    source: `story/${params.fileName}#${slugifyAnchor(section.heading)}`,
+    reason: params.reason,
+    excerpt: section.raw.trim(),
+  })));
 }
 
 interface MarkdownSection {
@@ -877,69 +879,69 @@ interface MarkdownSection {
 }
 
 function splitMarkdownSections(content: string): MarkdownSection[] {
-    const sections: Array<{ heading: string; lines: string[] }> = [];
-    let current: { heading: string; lines: string[] } | null = null;
-    for (const line of content.split(/\r?\n/)) {
-      const headingMatch = /^(#{1,6})\s+(.+?)\s*$/.exec(line);
-      if (headingMatch) {
-        if (current && current.lines.some((entry) => entry.trim().length > 0)) {
-          sections.push(current);
-        }
-        current = {
-          heading: headingMatch[2]!.trim(),
-          lines: [line],
-        };
-        continue;
+  const sections: Array<{ heading: string; lines: string[] }> = [];
+  let current: { heading: string; lines: string[] } | null = null;
+  for (const line of content.split(/\r?\n/)) {
+    const headingMatch = /^(#{1,6})\s+(.+?)\s*$/.exec(line);
+    if (headingMatch) {
+      if (current && current.lines.some((entry) => entry.trim().length > 0)) {
+        sections.push(current);
       }
-      if (current) {
-        current.lines.push(line);
-      }
+      current = {
+        heading: headingMatch[2]!.trim(),
+        lines: [line],
+      };
+      continue;
     }
-    if (current && current.lines.some((entry) => entry.trim().length > 0)) {
-      sections.push(current);
+    if (current) {
+      current.lines.push(line);
     }
-    return sections
-      .map((section) => ({
-        heading: section.heading,
-        raw: section.lines.join("\n").trim(),
-      }))
-      .filter((section) => section.raw.length > 0);
+  }
+  if (current && current.lines.some((entry) => entry.trim().length > 0)) {
+    sections.push(current);
+  }
+  return sections
+    .map((section) => ({
+      heading: section.heading,
+      raw: section.lines.join("\n").trim(),
+    }))
+    .filter((section) => section.raw.length > 0);
 }
 
 function deriveOutlineSelectionHints(plan: PlanChapterOutput): string[] {
-    return [
-      plan.intent.goal,
-      plan.intent.outlineNode,
-      plan.intent.arcContext,
-      ...plan.intent.mustKeep,
-      ...plan.intent.mustAvoid,
-      ...plan.intent.styleEmphasis,
-      plan.memo.goal,
-      plan.memo.body,
-      ...plan.memo.threadRefs,
-    ].filter((value): value is string => Boolean(value && value.trim()));
+  return [
+    plan.intent.goal,
+    plan.intent.outlineNode,
+    plan.intent.arcContext,
+    ...plan.intent.mustKeep,
+    ...plan.intent.mustAvoid,
+    ...plan.intent.styleEmphasis,
+    plan.memo.goal,
+    plan.memo.body,
+    ...plan.memo.threadRefs,
+  ].filter((value): value is string => Boolean(value && value.trim()));
 }
 
 function isRelevantStoryFrameSection(section: MarkdownSection, hints: ReadonlyArray<string>): boolean {
-    const heading = normalizeForMatch(section.heading);
-    const sectionText = normalizeForMatch(section.raw);
-    const hardHeadingSignals = [
-      "世界观",
-      "底色",
-      "铁律",
-      "规则",
-      "核心冲突",
-      "终局",
-      "world",
-      "tonal",
-      "rule",
-      "core conflict",
-      "endgame",
-    ];
-    if (hardHeadingSignals.some((signal) => heading.includes(normalizeForMatch(signal)))) {
-      return true;
-    }
-    return matchesOutlineHints(sectionText, hints);
+  const heading = normalizeForMatch(section.heading);
+  const sectionText = normalizeForMatch(section.raw);
+  const hardHeadingSignals = [
+    "世界观",
+    "底色",
+    "铁律",
+    "规则",
+    "核心冲突",
+    "终局",
+    "world",
+    "tonal",
+    "rule",
+    "core conflict",
+    "endgame",
+  ];
+  if (hardHeadingSignals.some((signal) => heading.includes(normalizeForMatch(signal)))) {
+    return true;
+  }
+  return matchesOutlineHints(sectionText, hints);
 }
 
 function isRelevantVolumeMapSection(
@@ -947,23 +949,23 @@ function isRelevantVolumeMapSection(
   hints: ReadonlyArray<string>,
   chapterNumber: number,
 ): boolean {
-    const heading = normalizeForMatch(section.heading);
-    if (headingMentionsChapter(heading, chapterNumber)) {
-      return true;
-    }
-    return matchesOutlineHints(normalizeForMatch(section.raw), hints);
+  const heading = normalizeForMatch(section.heading);
+  if (headingMentionsChapter(heading, chapterNumber)) {
+    return true;
+  }
+  return matchesOutlineHints(normalizeForMatch(section.raw), hints);
 }
 
 function matchesOutlineHints(sectionText: string, hints: ReadonlyArray<string>): boolean {
-    for (const hint of hints) {
-      const terms = extractMatchTerms(hint);
-      if (terms.length === 0) continue;
-      const hits = terms.filter((term) => sectionText.includes(term));
-      if (hits.length >= Math.min(2, terms.length)) {
-        return true;
-      }
+  for (const hint of hints) {
+    const terms = extractMatchTerms(hint);
+    if (terms.length === 0) continue;
+    const hits = terms.filter((term) => sectionText.includes(term));
+    if (hits.length >= Math.min(2, terms.length)) {
+      return true;
     }
-    return false;
+  }
+  return false;
 }
 
 function fallbackOutlineSections(
@@ -971,70 +973,70 @@ function fallbackOutlineSections(
   kind: "story-frame" | "volume-map",
   chapterNumber: number,
 ): ReadonlyArray<MarkdownSection> {
-    if (kind === "volume-map") {
-      const chapterHit = sections.find((section) =>
-        headingMentionsChapter(normalizeForMatch(section.heading), chapterNumber),
-      );
-      if (chapterHit) return [chapterHit];
-    }
-    return sections.slice(0, 1);
+  if (kind === "volume-map") {
+    const chapterHit = sections.find((section) =>
+      headingMentionsChapter(normalizeForMatch(section.heading), chapterNumber),
+    );
+    if (chapterHit) return [chapterHit];
+  }
+  return sections.slice(0, 1);
 }
 
 function extractMatchTerms(value: string): string[] {
-    const normalized = normalizeForMatch(value);
-    const terms = new Set<string>();
-    for (const term of normalized.match(/[a-z0-9]{3,}/g) ?? []) {
-      terms.add(term);
-    }
-    for (const term of normalized.match(/[\u4e00-\u9fff]{2,}/g) ?? []) {
-      terms.add(term);
-    }
-    return [...terms].filter((term) => term.length >= 2);
+  const normalized = normalizeForMatch(value);
+  const terms = new Set<string>();
+  for (const term of normalized.match(/[a-z0-9]{3,}/g) ?? []) {
+    terms.add(term);
+  }
+  for (const term of normalized.match(/[\u4e00-\u9fff]{2,}/g) ?? []) {
+    terms.add(term);
+  }
+  return [...terms].filter((term) => term.length >= 2);
 }
 
 function normalizeForMatch(value: string): string {
-    return value.toLowerCase().replace(/\s+/g, " ").trim();
+  return value.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
 function headingMentionsChapter(normalizedHeading: string, chapterNumber: number): boolean {
-    return normalizedHeading.includes(`chapter ${chapterNumber}`)
-      || normalizedHeading.includes(`chapter${chapterNumber}`)
-      || normalizedHeading.includes(`ch.${chapterNumber}`)
-      || normalizedHeading.includes(`ch${chapterNumber}`)
-      || normalizedHeading.includes(`第${chapterNumber}章`);
+  return normalizedHeading.includes(`chapter ${chapterNumber}`)
+    || normalizedHeading.includes(`chapter${chapterNumber}`)
+    || normalizedHeading.includes(`ch.${chapterNumber}`)
+    || normalizedHeading.includes(`ch${chapterNumber}`)
+    || normalizedHeading.includes(`第${chapterNumber}章`);
 }
 
 function slugifyAnchor(value: string): string {
-    return value
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9\u4e00-\u9fff]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      || "section";
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fff]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    || "section";
 }
 
 function dedupeBySource(entries: ContextPackage["selectedContext"]): ContextPackage["selectedContext"] {
-    const seen = new Set<string>();
-    return entries.filter((entry) => {
-      if (seen.has(entry.source)) return false;
-      seen.add(entry.source);
-      return true;
-    });
+  const seen = new Set<string>();
+  return entries.filter((entry) => {
+    if (seen.has(entry.source)) return false;
+    seen.add(entry.source);
+    return true;
+  });
 }
 
 function outlineFallback(fileName: string): string | null {
-    if (fileName === "outline/story_frame.md") return "story_bible.md";
-    if (fileName === "outline/volume_map.md") return "volume_outline.md";
-    return null;
+  if (fileName === "outline/story_frame.md") return "story_bible.md";
+  if (fileName === "outline/volume_map.md") return "volume_outline.md";
+  return null;
 }
 
 function toFactAnchor(predicate: string): string {
-    return predicate
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9\u4e00-\u9fff]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      || "fact";
+  return predicate
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fff]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    || "fact";
 }
 
 async function readFileOrDefault(path: string): Promise<string> {

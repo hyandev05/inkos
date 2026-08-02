@@ -49,6 +49,8 @@ describe("interactive-film-authoring confirm flow (stubbed LLM)", () => {
       }),
     });
     expect(propose.status).toBe(200);
+    const proposeBody = await propose.json() as { confirmToken?: string };
+    expect(typeof proposeBody.confirmToken).toBe("string");
 
     // Step 2: confirm the proposed action → executeConfirmedProductionAction runs draft_structure
     // stubChatCompletion returns STRUCTURE_JSON (4 nodes) when prompt mentions "骨架/nodes/结构"
@@ -61,6 +63,7 @@ describe("interactive-film-authoring confirm flow (stubbed LLM)", () => {
         sessionKind: "interactive-film-authoring",
         actionSource: "button",
         requestedIntent: "draft_structure",
+        confirmToken: proposeBody.confirmToken,
         actionPayload: { draftStructure: { instruction: "三幕分支结构", projectId: bookId } },
         sessionId,
       }),

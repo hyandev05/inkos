@@ -144,10 +144,10 @@ export function createUpsertCharactersTool(projectRoot: string, projectId: strin
         motivation: c.motivation ?? "",
         voiceProfile: c.voiceProfile
           ? {
-              speakingRhythm: c.voiceProfile.speakingRhythm ?? "",
-              vocabulary: c.voiceProfile.vocabulary ?? "",
-              sampleLines: c.voiceProfile.sampleLines ?? [],
-            }
+            speakingRhythm: c.voiceProfile.speakingRhythm ?? "",
+            vocabulary: c.voiceProfile.vocabulary ?? "",
+            sampleLines: c.voiceProfile.sampleLines ?? [],
+          }
           : undefined,
       }));
       const { rev } = await applyGraphDelta({ projectRoot, projectId, delta: buildUpsertCharactersDelta(chars) });
@@ -185,13 +185,13 @@ const FillNodeParams = Type.Object({
   instruction: Type.String({ description: "what this scene should contain (beats, who speaks, choices)" }),
 });
 
-export type FilmAuthoringLanguage = "zh" | "en";
+export type FilmAuthoringLanguage = "zh" | "en" | "vi";
 
 const NODE_SYSTEM_ZH = `你是互动影游编剧。根据当前图上下文和指令，为指定节点生成 JSON（单个 StoryNode：type/title/sceneDesc/dialogue[]/choices[]），只输出 JSON。choices[].targetNodeId 必须指向已存在的节点 id。`;
 const NODE_SYSTEM_EN = `You are an interactive film scriptwriter. Using the current graph context and the instruction, generate JSON for the specified node (a single StoryNode: type/title/sceneDesc/dialogue[]/choices[]). Output JSON only. Every choices[].targetNodeId must point to an existing node id.`;
 
 function nodeSystemPrompt(language: FilmAuthoringLanguage): string {
-  return language === "en" ? NODE_SYSTEM_EN : NODE_SYSTEM_ZH;
+  return language === "zh" ? NODE_SYSTEM_ZH : NODE_SYSTEM_EN;
 }
 
 function graphUpdatedDetails(rev: number, promptId: string, extra: Record<string, unknown> = {}) {

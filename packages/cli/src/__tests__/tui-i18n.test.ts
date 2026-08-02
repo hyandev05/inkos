@@ -9,6 +9,21 @@ describe("tui i18n", () => {
     expect(resolveTuiLocale({}, "en")).toBe("en");
   });
 
+  it("supports Vietnamese via env and project language", () => {
+    expect(resolveTuiLocale({ INKOS_TUI_LOCALE: "vi" })).toBe("vi");
+    expect(resolveTuiLocale({ LANG: "vi_VN.UTF-8" })).toBe("vi");
+    expect(resolveTuiLocale({}, "vi")).toBe("vi");
+  });
+
+  it("normalizes activity labels for Vietnamese chrome", () => {
+    const copy = getTuiCopy("vi");
+    expect(normalizeStageLabel("writing chapter", copy)).toBe("đang viết");
+    expect(normalizeStageLabel("waiting_human", copy)).toBe("chờ quyết định của bạn");
+    expect(normalizeStageLabel("idle", copy)).toBe("Sẵn sàng");
+    expect(formatModeLabel("semi", copy)).toBe("bán tự động");
+    expect(copy.composer.placeholder).toContain("InkOS");
+  });
+
   it("normalizes common activity labels for Chinese chrome", () => {
     const copy = getTuiCopy("zh-CN");
     expect(normalizeStageLabel("writing chapter", copy)).toBe("写作中");

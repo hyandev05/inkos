@@ -1,7 +1,7 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ingestMaterial } from "../materials/ingest.js";
 
 describe("material ingestion", () => {
@@ -59,5 +59,47 @@ describe("material ingestion", () => {
     expect(asset.source).toBe("https://example.com/cold-storage");
     expect(asset.excerpt).toContain("入库单需要签字");
     expect(asset.excerpt).not.toContain("bad()");
+  });
+
+  it("rejects project secrets such as .inkos/secrets.json", async () => {
+    await mkdir(join(root, ".inkos"), { recursive: true });
+    await writeFile(join(root, ".inkos", "secrets.json"), "{\"apiKey\":\"top-secret\"}", "utf-8");
+
+    await expect(ingestMaterial(root, {
+      sourceKind: "file",
+      filePath: ".inkos/secrets.json",
+      mimeType: "application/json",
+      purpose: "research",
+    }, {
+      now: () => new Date("2026-07-03T00:00:00.000Z"),
+    })).rejects.toThrow(/cannot read project secrets/);
+  });
+
+  it("rejects .env files", async () => {
+    await writeFile(join(root, ".env"), "API_KEY=top-secret", "utf-8");
+
+    await expect(ingestMaterial(root, {
+      sourceKind: "file",
+      filePath: ".env",
+      mimeType: "text/plain",
+      purpose: "research",
+    }, {
+      now: () => new Date("2026-07-03T00:00:00.000Z"),
+    })).rejects.toThrow(/cannot read project secrets/);
+  });
+
+  it("blocks URL ingestion of cloud metadata endpoints", async () => {
+    const fetchImpl = vi.fn(async () => new Response("", { status: 200 }));
+
+    await expect(ingestMaterial(root, {
+      sourceKind: "url",
+      url: "http://169.254.169.254/latest/meta-data/",
+      purpose: "research",
+    }, {
+      fetch: fetchImpl as unknown as typeof fetch,
+      now: () => new Date("2026-07-03T00:00:00.000Z"),
+    })).rejects.toThrow(/metadata endpoint/);
+
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });

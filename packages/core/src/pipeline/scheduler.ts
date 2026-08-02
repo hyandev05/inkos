@@ -96,6 +96,15 @@ export class Scheduler {
     this.tasks = [];
   }
 
+  /**
+   * 等待当前在飞的写周期 / 雷达扫描落盘后返回（不停止调度器）。
+   * 删除书等需要"磁盘静止"的操作在 rm 前调用，避免在飞写入把目录复活。
+   */
+  async waitForIdle(): Promise<void> {
+    if (this.writeCycleInFlight) await this.writeCycleInFlight;
+    if (this.radarScanInFlight) await this.radarScanInFlight;
+  }
+
   get isRunning(): boolean {
     return this.running;
   }

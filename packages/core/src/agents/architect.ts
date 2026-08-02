@@ -125,11 +125,19 @@ export class ArchitectAgent extends BaseAgent {
     const { profile: gp, body: genreBody } =
       await readGenreProfile(this.ctx.projectRoot, book.genre);
     const resolvedLanguage = book.language ?? gp.language;
+    const isEnglish = resolvedLanguage === "en";
+    const isVi = resolvedLanguage === "vi";
+    // Vietnamese uses the English prompt branch (Latin script) plus a hard
+    // override forcing all foundation output (titles, names, worldbuilding,
+    // rules) into Vietnamese — the same pattern as the English override below.
+    const useEnglishBranch = isEnglish || isVi;
+    // Helpers (review block, section parsing) only know zh/en.
+    const compatLanguage: "zh" | "en" = isVi || isEnglish ? "en" : "zh";
 
     const contextBlock = externalContext
       ? `\n\n## 外部指令\n以下是来自外部系统的创作指令，请将其融入设定中：\n\n${externalContext}\n`
       : "";
-    const reviewFeedbackBlock = this.buildReviewFeedbackBlock(reviewFeedback, resolvedLanguage);
+    const reviewFeedbackBlock = this.buildReviewFeedbackBlock(reviewFeedback, compatLanguage);
     const revisePrompt = options?.reviseFrom
       ? this.buildRevisePrompt(options.reviseFrom)
       : "";
@@ -140,23 +148,27 @@ export class ArchitectAgent extends BaseAgent {
     const powerBlock = gp.powerScaling ? "- 有明确的战力等级体系" : "";
     const eraBlock = gp.eraResearch ? "- 需要年代考据支撑（在 story_frame 中织入时代锚，在 book_rules 中写清不可违背的年代限制）" : "";
 
-    const systemPrompt = resolvedLanguage === "en"
+    const systemPrompt = useEnglishBranch
       ? this.buildEnglishFoundationPrompt(book, gp, genreBody, contextBlock, reviewFeedbackBlock, numericalBlock, powerBlock, eraBlock)
       : this.buildChineseFoundationPrompt(book, gp, genreBody, contextBlock, reviewFeedbackBlock, numericalBlock, powerBlock, eraBlock);
 
-    const langPrefix = resolvedLanguage === "en"
-      ? `【LANGUAGE OVERRIDE】ALL output (story_frame, volume_map, roles, book_rules, pending_hooks) MUST be written in English. Character names, place names, and all prose must be in English. The === SECTION: === tags remain unchanged. Do NOT emit rhythm_principles or current_state sections — rhythm principles live inside the last paragraph of volume_map; environment/era anchors (when relevant) are woven into story_frame's world-tonal-ground paragraph.\n\n`
-      : "";
-    const userMessage = resolvedLanguage === "en"
-      ? `Generate the complete foundation for a ${gp.name} novel titled "${book.title}". Write everything in English.`
-      : `请为标题为"${book.title}"的${gp.name}小说生成完整基础设定。`;
+    const langPrefix = isVi
+      ? `【LANGUAGE OVERRIDE】ALL output (story_frame, volume_map, roles, book_rules, pending_hooks) MUST be written in natural, native VIETNAMESE (Tiếng Việt). Book title, character names, place names, and all prose must be in Vietnamese with proper diacritics. Keep proper nouns without a natural Vietnamese translation in their original form. Do NOT output in Chinese; do NOT default to English. The === SECTION: === tags remain unchanged. Do NOT emit rhythm_principles or current_state sections — rhythm principles live inside the last paragraph of volume_map; environment/era anchors (when relevant) are woven into story_frame's world-tonal-ground paragraph.\n\n`
+      : isEnglish
+        ? `【LANGUAGE OVERRIDE】ALL output (story_frame, volume_map, roles, book_rules, pending_hooks) MUST be written in English. Character names, place names, and all prose must be in English. The === SECTION: === tags remain unchanged. Do NOT emit rhythm_principles or current_state sections — rhythm principles live inside the last paragraph of volume_map; environment/era anchors (when relevant) are woven into story_frame's world-tonal-ground paragraph.\n\n`
+        : "";
+    const userMessage = isVi
+      ? `Generate the complete foundation for a ${gp.name} novel titled "${book.title}". Write everything in Vietnamese (Tiếng Việt).`
+      : isEnglish
+        ? `Generate the complete foundation for a ${gp.name} novel titled "${book.title}". Write everything in English.`
+        : `请为标题为"${book.title}"的${gp.name}小说生成完整基础设定。`;
 
     const response = await this.chat([
       { role: "system", content: langPrefix + systemPrompt + revisePrompt },
       { role: "user", content: userMessage },
     ], { temperature: 0.8 });
 
-    return this.parseSectionsWithRepair(response.content, resolvedLanguage);
+    return this.parseSectionsWithRepair(response.content, compatLanguage);
   }
 
   private buildRevisePrompt(reviseFrom: {
@@ -622,11 +634,11 @@ You MUST emit all **5 SECTION blocks in order**: story_frame → volume_map → 
           const missing = repairError.missing.join("、");
           const message = language === "en"
             ? `The story foundation came back incomplete (missing: ${repairError.missing.join(", ")}). `
-              + "This usually means the model didn't write every section in one pass — it's not a problem with your input. "
-              + "Try again, or switch to a stronger model (e.g. deepseek-v4-pro / gpt-5.5) and regenerate."
+            + "This usually means the model didn't write every section in one pass — it's not a problem with your input. "
+            + "Try again, or switch to a stronger model (e.g. deepseek-v4-pro / gpt-5.5) and regenerate."
             : `基础设定没有生成完整(缺少:${missing})。`
-              + "这通常是模型一次没把所有部分写全,不是你的输入有问题。"
-              + "点重试,或换更强的模型(如 deepseek-v4-pro / gpt-5.5)再生成一次,通常就能解决。";
+            + "这通常是模型一次没把所有部分写全,不是你的输入有问题。"
+            + "点重试,或换更强的模型(如 deepseek-v4-pro / gpt-5.5)再生成一次,通常就能解决。";
           throw new ArchitectIncompleteFoundationError(
             repairError.missing,
             repairError.content,
@@ -645,21 +657,21 @@ You MUST emit all **5 SECTION blocks in order**: story_frame → volume_map → 
     const missingList = error.missing.join(", ");
     const system = language === "en"
       ? [
-          "You repair InkOS architect output formatting.",
-          "The previous draft is partially useful but is missing required SECTION blocks.",
-          "Do not invent a new book. Preserve usable existing content and add the missing parts.",
-          "Return the complete output with exactly these 5 SECTION blocks in order: story_frame, volume_map, roles, book_rules, pending_hooks.",
-          "book_rules must be ordinary Markdown, not YAML. pending_hooks must be a Markdown table.",
-          "Do not explain the repair.",
-        ].join("\n")
+        "You repair InkOS architect output formatting.",
+        "The previous draft is partially useful but is missing required SECTION blocks.",
+        "Do not invent a new book. Preserve usable existing content and add the missing parts.",
+        "Return the complete output with exactly these 5 SECTION blocks in order: story_frame, volume_map, roles, book_rules, pending_hooks.",
+        "book_rules must be ordinary Markdown, not YAML. pending_hooks must be a Markdown table.",
+        "Do not explain the repair.",
+      ].join("\n")
       : [
-          "你负责修复 InkOS architect 的输出格式。",
-          "上一轮草稿有可用内容，但缺少必需的 SECTION 块。",
-          "不要重新发明一本书；保留已有可用内容，只补齐缺失部分并整理成完整输出。",
-          "必须按顺序返回完整 5 段 SECTION：story_frame、volume_map、roles、book_rules、pending_hooks。",
-          "book_rules 必须是普通 Markdown，不要 YAML；pending_hooks 必须是 Markdown 表格。",
-          "不要解释修复过程。",
-        ].join("\n");
+        "你负责修复 InkOS architect 的输出格式。",
+        "上一轮草稿有可用内容，但缺少必需的 SECTION 块。",
+        "不要重新发明一本书；保留已有可用内容，只补齐缺失部分并整理成完整输出。",
+        "必须按顺序返回完整 5 段 SECTION：story_frame、volume_map、roles、book_rules、pending_hooks。",
+        "book_rules 必须是普通 Markdown，不要 YAML；pending_hooks 必须是 Markdown 表格。",
+        "不要解释修复过程。",
+      ].join("\n");
     const user = language === "en"
       ? `Missing sections: ${missingList}\n\nOriginal partial output:\n\n${error.content}`
       : `缺失 section：${missingList}\n\n原始不完整输出如下：\n\n${error.content}`;
@@ -897,8 +909,8 @@ You MUST emit all **5 SECTION blocks in order**: story_frame → volume_map → 
         const currentStateSeed = output.currentState?.trim()
           ? output.currentState
           : (language === "en"
-              ? "# Current State\n\n> Seeded at book creation. Runtime state is appended by the consolidator after each chapter.\n"
-              : "# 当前状态\n\n> 建书时占位。运行时每章之后由 consolidator 追加最新状态。\n");
+            ? "# Current State\n\n> Seeded at book creation. Runtime state is appended by the consolidator after each chapter.\n"
+            : "# 当前状态\n\n> 建书时占位。运行时每章之后由 consolidator 追加最新状态。\n");
         writes.push(writeFile(join(storyDir, "current_state.md"), currentStateSeed, "utf-8"));
         writes.push(writeFile(join(storyDir, "pending_hooks.md"), output.pendingHooks, "utf-8"));
         writes.push(writeFile(
@@ -972,8 +984,8 @@ You MUST emit all **5 SECTION blocks in order**: story_frame → volume_map → 
       const currentStateSeed = output.currentState?.trim()
         ? output.currentState
         : (language === "en"
-            ? "# Current State\n\n> Seeded at book creation. Runtime state is appended by the consolidator after each chapter. Initial per-character state lives in roles/*.Current_State; load-bearing initial world facts live in pending_hooks rows with start_chapter=0.\n"
-            : "# 当前状态\n\n> 建书时占位。运行时每章之后由 consolidator 追加最新状态。每个角色的初始状态详见 roles/*.当前现状；承重的初始世界设定见 pending_hooks 里 startChapter=0 的行。\n");
+          ? "# Current State\n\n> Seeded at book creation. Runtime state is appended by the consolidator after each chapter. Initial per-character state lives in roles/*.Current_State; load-bearing initial world facts live in pending_hooks rows with start_chapter=0.\n"
+          : "# 当前状态\n\n> 建书时占位。运行时每章之后由 consolidator 追加最新状态。每个角色的初始状态详见 roles/*.当前现状；承重的初始世界设定见 pending_hooks 里 startChapter=0 的行。\n");
       writes.push(writeFile(join(storyDir, "current_state.md"), currentStateSeed, "utf-8"));
       writes.push(writeFile(join(storyDir, "pending_hooks.md"), output.pendingHooks, "utf-8"));
       writes.push(writeFile(
@@ -1010,37 +1022,47 @@ You MUST emit all **5 SECTION blocks in order**: story_frame → volume_map → 
     const { profile: gp, body: genreBody } =
       await readGenreProfile(this.ctx.projectRoot, book.genre);
     const resolvedLanguage = book.language ?? gp.language;
-    const reviewFeedbackBlock = this.buildReviewFeedbackBlock(reviewFeedback, resolvedLanguage);
+    const isEnglish = resolvedLanguage === "en";
+    const isVi = resolvedLanguage === "vi";
+    const useEnglishBranch = isEnglish || isVi;
+    const compatLanguage: "zh" | "en" = isEnglish || isVi ? "en" : "zh";
+    const reviewFeedbackBlock = this.buildReviewFeedbackBlock(reviewFeedback, compatLanguage);
 
     const contextBlock = externalContext
-      ? (resolvedLanguage === "en"
-          ? `\n\n## External Instructions\n${externalContext}\n`
-          : `\n\n## 外部指令\n${externalContext}\n`)
+      ? (useEnglishBranch
+        ? `\n\n## External Instructions\n${externalContext}\n`
+        : `\n\n## 外部指令\n${externalContext}\n`)
       : "";
 
     const numericalBlock = gp.numericalSystem
-      ? (resolvedLanguage === "en"
-          ? "- The story uses a trackable numerical/resource system"
-          : "- 有明确的数值/资源体系可追踪")
-      : (resolvedLanguage === "en"
-          ? "- No explicit numerical system"
-          : "- 本题材无数值系统");
+      ? (useEnglishBranch
+        ? "- The story uses a trackable numerical/resource system"
+        : "- 有明确的数值/资源体系可追踪")
+      : (useEnglishBranch
+        ? "- No explicit numerical system"
+        : "- 本题材无数值系统");
 
     const isSeries = options?.importMode === "series";
 
-    const continuationDirective = resolvedLanguage === "en"
+    const continuationDirective = useEnglishBranch
       ? (isSeries
-          ? `## Continuation Direction Requirements
+        ? `## Continuation Direction Requirements
 The continuation portion must open up new narrative space — new conflict vector, new location, new time horizon. Ignite within 5 chapters; at least 50% fresh scenes.`
-          : `## Continuation Direction
+        : `## Continuation Direction
 Naturally extend the existing arc. Advance existing conflicts, pay off planted hooks, introduce new complications organically.`)
       : (isSeries
-          ? `## 续写方向要求
+        ? `## 续写方向要求
 续写必须引入新叙事空间——新冲突、新地点、新时间。5章内引爆，50%以上场景新鲜。`
-          : `## 续写方向
+        : `## 续写方向
 自然延续已有叙事弧线。推进现有冲突、兑现已埋伏笔、引入有机新变数。`);
 
-    const systemPrompt = resolvedLanguage === "en"
+    const languageOverrideBlock = isVi
+      ? `\n\n## LANGUAGE OVERRIDE — output language is VIETNAMESE (Tiếng Việt)\nAll foundation output (story_frame, volume_map, roles, book_rules, pending_hooks) MUST be written in natural, native Vietnamese with proper diacritics. Book title, character names, and place names in Vietnamese. Keep proper nouns without a natural Vietnamese translation in their original form. Do NOT output in Chinese; do NOT default to English.\n`
+      : isEnglish
+        ? `\n\nAll output MUST be written in English.\n`
+        : "";
+
+    const systemPrompt = useEnglishBranch
       ? `You are a professional novel architect. Reverse-engineer a prose-density foundation from the source chapters and write the continuation path.${contextBlock}${reviewFeedbackBlock}
 
 ## Book metadata
@@ -1062,7 +1084,7 @@ Follow the consolidated 5-section === SECTION: === layout: story_frame, volume_m
 
 All prose must be derived from the source package. Do not invent settings. If the package says it is compressed, treat chapter catalog + excerpts as evidence for the foundation; the full chapters will be replayed later for detailed truth files. For volume_map, treat existing chapters as "review" (one paragraph) and continuation as prose chapter-level planning. Hook extraction must be complete for the evidence provided.
 
-All output MUST be written in English.`
+All output MUST be written in English.${languageOverrideBlock}`
       : `你是专业的网络小说架构师。从已有章节中反向推导散文密度的基础设定，同时设计续写路径。${contextBlock}${reviewFeedbackBlock}
 
 ## 书籍元信息
@@ -1083,8 +1105,8 @@ ${continuationDirective}
 
 所有 prose 必须从资料包中推导，不得臆造。若资料包声明为压缩包，把章节目录和正文摘录当作基础设定证据；完整章节会在后续回放阶段逐章进入 truth files。volume_map 中，已有章节作为"回顾段"（一段散文），续写部分写到章级 prose。伏笔识别以资料包提供的证据为准，尽量完整。`;
 
-    const userMessage = resolvedLanguage === "en"
-      ? `Generate the complete foundation for an imported ${gp.name} novel titled "${book.title}". Write everything in English.\n\n${chaptersText}`
+    const userMessage = useEnglishBranch
+      ? `Generate the complete foundation for an imported ${gp.name} novel titled "${book.title}". Write everything in ${isVi ? "Vietnamese" : "English"}.\n\n${chaptersText}`
       : `以下是《${book.title}》的已有正文资料包，请从中反向推导完整基础设定：\n\n${chaptersText}`;
 
     const response = await this.chat([
@@ -1092,7 +1114,7 @@ ${continuationDirective}
       { role: "user", content: userMessage },
     ], { temperature: 0.5 });
 
-    return this.parseSectionsWithRepair(response.content, resolvedLanguage);
+    return this.parseSectionsWithRepair(response.content, compatLanguage);
   }
 
   async generateFanficFoundation(
@@ -1103,7 +1125,11 @@ ${continuationDirective}
   ): Promise<ArchitectOutput> {
     const { profile: gp, body: genreBody } =
       await readGenreProfile(this.ctx.projectRoot, book.genre);
-    const reviewFeedbackBlock = this.buildReviewFeedbackBlock(reviewFeedback, book.language ?? "zh");
+    const rawLanguage = book.language ?? gp.language;
+    const isEnglish = rawLanguage === "en";
+    const isVi = rawLanguage === "vi";
+    const compatLanguage: "zh" | "en" = isEnglish || isVi ? "en" : "zh";
+    const reviewFeedbackBlock = this.buildReviewFeedbackBlock(reviewFeedback, compatLanguage);
 
     const MODE_INSTRUCTIONS: Record<FanficMode, string> = {
       canon: "剧情发生在原作空白期或未详述的角度。不可改变原作已确立的事实。",
@@ -1112,7 +1138,38 @@ ${continuationDirective}
       cp: "以配对角色的关系线为主线规划卷纲。每卷必须有关系推进节点。",
     };
 
-    const systemPrompt = `你是专业同人架构师。基于原作正典为同人生成散文密度的基础设定。
+    const languageOverrideBlock = isVi
+      ? `\n\n## LANGUAGE OVERRIDE — output language is VIETNAMESE (Tiếng Việt)\nAll foundation output MUST be written in natural, native Vietnamese with proper diacritics. Book title, character names, and place names in Vietnamese. Keep proper nouns without a natural Vietnamese translation in their original form. Do NOT output in Chinese; do NOT default to English.\n`
+      : "";
+
+    const systemPrompt = isEnglish || isVi
+      ? `You are a professional fanfiction architect. Generate a prose-density foundation for a fan work based on the original canon.${languageOverrideBlock}
+
+## Fanfic mode: ${fanficMode}
+${MODE_INSTRUCTIONS[fanficMode]}
+
+## New-setting requirements
+Design an original narrative space, not a retelling of canon:
+1. Mark the divergence point in story_frame
+2. Independent core conflict in volume_map
+3. Ignite within 5 chapters
+4. At least 50% fresh scenes
+${reviewFeedbackBlock}
+
+## Canon
+${fanficCanon}
+
+## Genre body
+${genreBody}
+
+## Output contract
+Follow the consolidated 5-section === SECTION: === layout: story_frame / volume_map / roles / book_rules / pending_hooks. Do NOT emit rhythm_principles or current_state — rhythm principles live in the last paragraph of volume_map; character initial status lives in roles.Current_State; initial hooks live in pending_hooks start_chapter=0 rows; era/setting anchors (only when the canon anchors a real year) are woven into story_frame's world-tonal-ground paragraph.
+
+- Main characters must come from the canon
+- Original supporting characters are allowed; mark them "original"
+- book_rules as plain Markdown; must state the fanfic mode: ${fanficMode}
+- All output MUST be written in ${isVi ? "Vietnamese" : "English"}.`
+      : `你是专业同人架构师。基于原作正典为同人生成散文密度的基础设定。
 
 ## 同人模式：${fanficMode}
 ${MODE_INSTRUCTIONS[fanficMode]}
@@ -1145,11 +1202,13 @@ ${genreBody}
       { role: "system", content: systemPrompt },
       {
         role: "user",
-        content: `请为标题为"${book.title}"的${fanficMode}模式同人小说生成基础设定。目标${book.targetChapters}章，每章${book.chapterWordCount}字。`,
+        content: isEnglish || isVi
+          ? `Generate the complete foundation for a "${book.title}" fan work in ${fanficMode} mode. Target ${book.targetChapters} chapters, ${book.chapterWordCount} words per chapter. Write everything in ${isVi ? "Vietnamese" : "English"}.`
+          : `请为标题为"${book.title}"的${fanficMode}模式同人小说生成基础设定。目标${book.targetChapters}章，每章${book.chapterWordCount}字。`,
       },
     ], { temperature: 0.7 });
 
-    return this.parseSectionsWithRepair(response.content, book.language ?? "zh");
+    return this.parseSectionsWithRepair(response.content, compatLanguage);
   }
 
   // -------------------------------------------------------------------------

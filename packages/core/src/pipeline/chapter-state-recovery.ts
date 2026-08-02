@@ -1,4 +1,5 @@
 import type { AuditIssue } from "../agents/continuity.js";
+import { toEnCompatLanguage } from "../utils/language.js";
 import type {
   ValidationResult,
   ValidationWarning,
@@ -77,7 +78,7 @@ export async function retrySettlementAfterValidationFailure(
       retryOutput.updatedState,
       params.oldHooks,
       retryOutput.updatedHooks,
-      params.language,
+      toEnCompatLanguage(params.language),
     );
   } catch (error) {
     throw new Error(`State validation retry failed for chapter ${params.chapterNumber}: ${String(error)}`);

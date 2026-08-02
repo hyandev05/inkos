@@ -40,8 +40,9 @@
   },
   "pnpm": {
     "overrides": {
-      "@mariozechner/pi-ai": "0.67.1",
-      "@mariozechner/pi-agent-core": "0.67.1"
+      "@mariozechner/pi-ai": "0.73.1",
+      "@mariozechner/pi-agent-core": "0.73.1",
+      "protobufjs": "7.6.5"
     }
   }
 }

@@ -4,7 +4,7 @@ import type { PipelineRunner } from "../pipeline/runner.js";
 import { ArchitectIncompleteFoundationError } from "../agents/architect.js";
 import { type ReviseMode } from "../agents/reviser.js";
 import { defaultChapterLength } from "../utils/length-metrics.js";
-import { inferLanguage } from "../utils/language.js";
+import { inferLanguage, toEnCompatLanguage } from "../utils/language.js";
 import { mkdir, readFile, writeFile, readdir, stat } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import { StateManager } from "../state/manager.js";
@@ -12,7 +12,8 @@ import { deleteLatestChapter } from "../state/chapter-delete.js";
 import { assertSafeTruthFileName, createInteractionToolsFromDeps } from "../interaction/project-tools.js";
 import { writeExportArtifact } from "../interaction/export-artifact.js";
 import { assertSafeBookId, deriveBookIdFromTitle } from "../utils/book-id.js";
-import { safeChildPath } from "../utils/path-safety.js";
+import { safeChildPath, isForbiddenSecretPath } from "../utils/path-safety.js";
+import { assertSafeRegexPattern } from "../utils/chapter-splitter.js";
 import { normalizePlatformId, normalizePlatformOrOther } from "../models/book.js";
 import { generateShortFictionCover, runShortFictionProduction } from "../pipeline/short-fiction-runner.js";
 import { runInteractiveFilmCreation, runScriptCreation, runStoryboardCreation } from "../pipeline/script-storyboard-runner.js";
@@ -403,7 +404,7 @@ function compactPlayStartPayload(value: ProposeActionParamsType["playStart"]): N
 
 function proposedActionPayload(
   params: ProposeActionParamsType,
-  language: "zh" | "en",
+  language: "zh" | "en" | "vi",
 ): ActionPayload | undefined {
   const payload: ActionPayload = {};
   if (params.action === "create_book") {
@@ -491,7 +492,7 @@ function assertExecutableProposedAction(params: ProposeActionParamsType, payload
 }
 
 export function createProposeActionTool(
-  language: "zh" | "en" = "zh",
+  language: "zh" | "en" | "vi" = "zh",
   options: ProposeActionToolOptions = {},
 ): AgentTool<typeof ProposeActionParams> {
   return {
@@ -584,6 +585,7 @@ const SubAgentParams = Type.Object({
   language: Type.Optional(Type.Union([
     Type.Literal("zh"),
     Type.Literal("en"),
+    Type.Literal("vi"),
   ], { description: "architect only: writing language. Default: zh" })),
   targetChapters: Type.Optional(Type.Number({ description: "architect only: total chapter count. Default: 200" })),
   chapterWordCount: Type.Optional(Type.Number({ description: "architect/writer: per-chapter length in the book's native unit (zh characters / en words). Default: 3000 zh, 2000 en" })),
@@ -629,6 +631,7 @@ const ArchitectCreateSubAgentParams = Type.Object({
   language: Type.Optional(Type.Union([
     Type.Literal("zh"),
     Type.Literal("en"),
+    Type.Literal("vi"),
   ], { description: "Confirmed writing language. Default: zh" })),
   targetChapters: Type.Optional(Type.Number({ description: "Confirmed total chapter count. Default: 200" })),
   chapterWordCount: Type.Optional(Type.Number({ description: "Confirmed per-chapter length in the book's native unit. Default: 3000 zh, 2000 en" })),
@@ -673,27 +676,28 @@ export function createSubAgentTool(
   options: {
     readonly actionPayload?: ActionPayload;
     readonly architectCreateOnly?: boolean;
-    readonly language?: "zh" | "en";
+    readonly language?: "zh" | "en" | "vi";
   } = {},
 ): AgentTool<any> {
-  const sessionIsZh = (options.language ?? "zh") !== "en";
+  const sessionIsZh = (options.language ?? "zh") === "zh";
+  const sessionIsVi = (options.language ?? "zh") === "vi";
   return {
     name: "sub_agent",
     description: options.architectCreateOnly
       ? "Create a new long-form InkOS book foundation. This confirmation turn can only call agent='architect'; writing chapters happens after the session is bound to the created book."
       : "Delegate a heavy operation to a specialised sub-agent. " +
-        "Use agent='architect' to initialise a new book, 'writer' to write the next chapter, " +
-        "'auditor' to audit quality, 'reviser' to revise a chapter, 'exporter' to export.",
+      "Use agent='architect' to initialise a new book, 'writer' to write the next chapter, " +
+      "'auditor' to audit quality, 'reviser' to revise a chapter, 'exporter' to export.",
     label: "Sub-Agent",
     parameters: options.architectCreateOnly ? ArchitectCreateSubAgentParams : SubAgentParams,
     prepareArguments: prepareSubAgentArguments,
     async execute(
       _toolCallId: string,
-      params: SubAgentParamsType,
+      params: unknown,
       _signal?: AbortSignal,
       onUpdate?: AgentToolUpdateCallback,
     ): Promise<AgentToolResult<unknown>> {
-      const { agent, instruction, bookId, title, chapterNumber, chapterCount, genre, platform, language, targetChapters, chapterWordCount, revise, feedback, mode, format, approvedOnly } = params;
+      const { agent, instruction, bookId, title, chapterNumber, chapterCount, genre, platform, language, targetChapters, chapterWordCount, revise, feedback, mode, format, approvedOnly } = params as SubAgentParamsType;
 
       const progress = (msg: string) => {
         onUpdate?.(textResult(msg));
@@ -883,18 +887,18 @@ export function createSubAgentTool(
               const diagnostics = result.revisionDiagnostics;
               const diagnosticText = diagnostics
                 ? [
-                    "",
-                    "Revision gate:",
-                    `- Standard: ${diagnostics.standard}`,
-                    `- Before: blocking=${diagnostics.before.blockingCount}, critical=${diagnostics.before.criticalCount}, aiTell=${diagnostics.before.aiTellCount}`,
-                    `- After: blocking=${diagnostics.after.blockingCount}, critical=${diagnostics.after.criticalCount}, aiTell=${diagnostics.after.aiTellCount}`,
-                    ...(diagnostics.remainingIssues.length > 0
-                      ? [
-                          "- Remaining issues:",
-                          ...diagnostics.remainingIssues.map((issue) => `  - [${issue.severity}] ${issue.category}: ${issue.description}${issue.suggestion ? ` (${issue.suggestion})` : ""}`),
-                        ]
-                      : []),
-                  ].join("\n")
+                  "",
+                  "Revision gate:",
+                  `- Standard: ${diagnostics.standard}`,
+                  `- Before: blocking=${diagnostics.before.blockingCount}, critical=${diagnostics.before.criticalCount}, aiTell=${diagnostics.before.aiTellCount}`,
+                  `- After: blocking=${diagnostics.after.blockingCount}, critical=${diagnostics.after.criticalCount}, aiTell=${diagnostics.after.aiTellCount}`,
+                  ...(diagnostics.remainingIssues.length > 0
+                    ? [
+                      "- Remaining issues:",
+                      ...diagnostics.remainingIssues.map((issue) => `  - [${issue.severity}] ${issue.category}: ${issue.description}${issue.suggestion ? ` (${issue.suggestion})` : ""}`),
+                    ]
+                    : []),
+                ].join("\n")
                 : "";
               return textResult(
                 `Revision not applied for "${targetBookId}" chapter ${resultChapter ?? "latest"}: ${result.skippedReason ?? result.status ?? "pipeline kept the original chapter"}.${diagnosticText}`,
@@ -1002,10 +1006,10 @@ export function createResearchWebTool(projectRoot: string): AgentTool<typeof Res
       const searchConfig = await readResearchSearchConfig(projectRoot);
       const searchOptions = searchConfig.enabled
         ? {
-            apiKey: searchConfig.apiKey,
-            apiKeyEnv: searchConfig.apiKeyEnv,
-            baseUrl: searchConfig.baseUrl,
-          }
+          apiKey: searchConfig.apiKey,
+          apiKeyEnv: searchConfig.apiKeyEnv,
+          baseUrl: searchConfig.baseUrl,
+        }
         : {};
       const report = await runResearchReport({
         topic: params.topic,
@@ -1238,6 +1242,7 @@ export function createImportChaptersTool(
   pipeline: PipelineRunner,
   activeBookId: string | null,
   projectRoot: string,
+  options: { readonly allowSystemPaths?: boolean } = {},
 ): AgentTool<typeof ImportChaptersParams> {
   return {
     name: "import_chapters",
@@ -1264,9 +1269,26 @@ export function createImportChaptersTool(
         );
       }
 
-      const resolvedSourcePath = isAbsolute(params.sourcePath)
+      const absoluteSource = isAbsolute(params.sourcePath);
+      const resolvedSourcePath = absoluteSource
         ? params.sourcePath
         : resolve(projectRoot, params.sourcePath);
+      let sourceInsideProject = false;
+      try {
+        safeChildPath(projectRoot, resolvedSourcePath);
+        sourceInsideProject = true;
+      } catch {
+        sourceInsideProject = false;
+      }
+      if (absoluteSource && !sourceInsideProject && !options.allowSystemPaths) {
+        throw new Error(
+          "import_chapters cannot read absolute host paths. Use a path relative to the project root, " +
+          "or set INKOS_AGENT_ALLOW_SYSTEM_READ=1 to allow absolute system paths.",
+        );
+      }
+      if (isForbiddenSecretPath(projectRoot, resolvedSourcePath)) {
+        throw new Error("import_chapters cannot read project secrets (.inkos/, .env) or runtime internals.");
+      }
       onUpdate?.(textResult(`Reading chapters from ${resolvedSourcePath}...`));
       const chapters = await loadChaptersFromPath(resolvedSourcePath, params.splitPattern);
 
@@ -1372,7 +1394,7 @@ type ShortFictionRunParamsType = Static<typeof ShortFictionRunParams>;
 // 抛出带合法范围的双语错误，不让任务开跑后才在 runner 中途失败。
 function assertShortRunCharsPerChapter(
   value: number | undefined,
-  language: "zh" | "en",
+  language: "zh" | "en" | "vi",
 ): void {
   if (value === undefined) return;
   const { min, max } = shortRunCharsPerChapterRange(language);
@@ -1383,7 +1405,7 @@ function assertShortRunCharsPerChapter(
 export function createShortFictionRunTool(
   pipeline: PipelineRunner,
   projectRoot: string,
-  options: { readonly actionPayload?: ActionPayload; readonly language?: "zh" | "en" } = {},
+  options: { readonly actionPayload?: ActionPayload; readonly language?: "zh" | "en" | "vi" } = {},
 ): AgentTool<typeof ShortFictionRunParams> {
   return {
     name: "short_fiction_run",
@@ -1422,7 +1444,9 @@ export function createShortFictionRunTool(
           storyId: shortPayload?.storyId ?? params.storyId,
           chapterCount: shortPayload?.chapters ?? params.chapters,
           charsPerChapter,
-          language,
+          // Keep undefined so the runner falls back to its own default; only
+          // collapse vi → en (short-fiction prompts have zh/en branches).
+          language: language === "vi" ? "en" : language,
           cover: shortPayload?.cover ?? params.cover,
           coverBaseUrl: params.coverBaseUrl,
           coverEndpoint: params.coverEndpoint,
@@ -1443,10 +1467,10 @@ export function createShortFictionRunTool(
           result.coverImagePath
             ? `Cover image: ${result.coverImagePath}`
             : [
-                "Cover image: not generated.",
-                `Cover image reason: ${summarizeCoverGenerationError(result.coverError)}`,
-                "The short fiction draft, synopsis, selling points, and cover prompt were still written successfully.",
-              ].join("\n"),
+              "Cover image: not generated.",
+              `Cover image reason: ${summarizeCoverGenerationError(result.coverError)}`,
+              "The short fiction draft, synopsis, selling points, and cover prompt were still written successfully.",
+            ].join("\n"),
         ].join("\n"),
         { kind: "short_fiction_created", ...result },
       );
@@ -1575,7 +1599,7 @@ type ScriptCreateParamsType = Static<typeof ScriptCreateParams>;
 export function createScriptCreationTool(
   pipeline: PipelineRunner,
   projectRoot: string,
-  options: { readonly actionPayload?: ActionPayload; readonly language?: "zh" | "en" } = {},
+  options: { readonly actionPayload?: ActionPayload; readonly language?: "zh" | "en" | "vi" } = {},
 ): AgentTool<typeof ScriptCreateParams> {
   return {
     name: "script_create",
@@ -1604,7 +1628,7 @@ export function createScriptCreationTool(
         requirements: payload?.requirements ?? params.requirements,
         episodeCount: payload?.episodeCount ?? params.episodeCount,
         episodeDuration: payload?.episodeDuration ?? params.episodeDuration,
-        language: options.language,
+        language: toEnCompatLanguage(options.language),
         projectId: payload?.projectId ?? params.projectId,
         outDir: payload?.outDir ?? params.outDir,
         onProgress: progress,
@@ -1666,7 +1690,7 @@ type StoryboardCreateParamsType = Static<typeof StoryboardCreateParams>;
 export function createStoryboardCreationTool(
   pipeline: PipelineRunner,
   projectRoot: string,
-  options: { readonly actionPayload?: ActionPayload; readonly language?: "zh" | "en" } = {},
+  options: { readonly actionPayload?: ActionPayload; readonly language?: "zh" | "en" | "vi" } = {},
 ): AgentTool<typeof StoryboardCreateParams> {
   return {
     name: "storyboard_create",
@@ -1696,7 +1720,7 @@ export function createStoryboardCreationTool(
         aspectRatio: payload?.aspectRatio ?? params.aspectRatio,
         granularity: payload?.granularity ?? params.granularity,
         maxShots: payload?.maxShots ?? params.maxShots,
-        language: options.language,
+        language: toEnCompatLanguage(options.language),
         projectId: payload?.projectId ?? params.projectId,
         outDir: payload?.outDir ?? params.outDir,
         onProgress: progress,
@@ -1763,7 +1787,7 @@ type InteractiveFilmCreateParamsType = Static<typeof InteractiveFilmCreateParams
 export function createInteractiveFilmCreationTool(
   pipeline: PipelineRunner,
   projectRoot: string,
-  options: { readonly actionPayload?: ActionPayload; readonly language?: "zh" | "en" } = {},
+  options: { readonly actionPayload?: ActionPayload; readonly language?: "zh" | "en" | "vi" } = {},
 ): AgentTool<typeof InteractiveFilmCreateParams> {
   return {
     name: "interactive_film_create",
@@ -1794,7 +1818,7 @@ export function createInteractiveFilmCreationTool(
         episodeDuration: payload?.episodeDuration ?? params.episodeDuration,
         budget: payload?.budget ?? params.budget,
         referenceMode: payload?.referenceMode ?? params.referenceMode,
-        language: options.language,
+        language: toEnCompatLanguage(options.language),
         projectId: payload?.projectId ?? params.projectId,
         outDir: payload?.outDir ?? params.outDir,
         onProgress: progress,
@@ -1977,7 +2001,7 @@ export function createPlayStartTool(
       const initialScene = isUsablePlayInitialScene(playPayload?.initialScene)
         ? playPayload?.initialScene
         : params.initialScene;
-      const playLanguage = inferLanguage([title, premise, worldContract, visualContract, initialScene].filter(Boolean).join("\n"));
+      const playLanguage = toEnCompatLanguage(inferLanguage([title, premise, worldContract, visualContract, initialScene].filter(Boolean).join("\n")));
       const world = await store.createWorld({
         id: worldId,
         title: title.trim(),
@@ -2076,7 +2100,7 @@ const PlayStepParams = Type.Object({
 type PlayStepParamsType = Static<typeof PlayStepParams>;
 
 export interface PlayStepToolOptions {
-  readonly language?: "zh" | "en";
+  readonly language?: "zh" | "en" | "vi";
   readonly runnerFactory?: (input: {
     readonly projectRoot: string;
     readonly worldId: string;
@@ -2107,7 +2131,7 @@ const PlayReviseParams = Type.Object({
 type PlayReviseParamsType = Static<typeof PlayReviseParams>;
 
 export interface PlayReviseToolOptions {
-  readonly language?: "zh" | "en";
+  readonly language?: "zh" | "en" | "vi";
   readonly runnerFactory?: (input: {
     readonly projectRoot: string;
     readonly worldId: string;
@@ -2198,7 +2222,7 @@ type PlayEditParamsType = Static<typeof PlayEditParams>;
 export function createPlayEditTool(
   projectRoot: string,
   sessionId: string,
-  language: "zh" | "en" = "zh",
+  language: "zh" | "en" | "vi" = "zh",
 ): AgentTool<typeof PlayEditParams> {
   return {
     name: "play_edit",
@@ -2910,6 +2934,7 @@ export function createGrepTool(projectRoot: string): AgentTool<typeof GrepParams
     ): Promise<AgentToolResult<undefined>> {
       try {
         const bookDir = safeBooksPath(booksRoot, params.bookId);
+        assertSafeRegexPattern(params.pattern);
         const regex = new RegExp(params.pattern, "gi");
         const results: string[] = [];
 

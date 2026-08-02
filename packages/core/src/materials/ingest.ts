@@ -1,7 +1,8 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, extname, join, relative } from "node:path";
 import { extractText, getDocumentProxy } from "unpdf";
-import { safeChildPath } from "../utils/path-safety.js";
+import { safeChildPath, isForbiddenSecretPath } from "../utils/path-safety.js";
+import { assertFetchUrlSafe } from "../utils/proxy-fetch.js";
 import { toPosixPath } from "../utils/posix-path.js";
 
 export type MaterialPurpose = "reference" | "worldbuilding" | "script" | "storyboard" | "research" | "general";
@@ -102,6 +103,9 @@ async function readMaterialSource(
   }
   if (!input.filePath) throw new Error("ingest_material.filePath is required for file sources.");
   const safePath = safeChildPath(projectRoot, input.filePath);
+  if (isForbiddenSecretPath(projectRoot, safePath)) {
+    throw new Error("ingest_material cannot read project secrets (.inkos/, .env) or runtime internals.");
+  }
   const buffer = await readFile(safePath);
   if (buffer.byteLength > MAX_SOURCE_BYTES) {
     throw new Error(`Material file is too large (${buffer.byteLength} bytes).`);
@@ -120,6 +124,7 @@ async function readUrlMaterial(url: string, fetchImpl: typeof fetch): Promise<Ma
   if (!["http:", "https:"].includes(parsed.protocol)) {
     throw new Error(`Unsupported URL protocol: ${parsed.protocol}`);
   }
+  await assertFetchUrlSafe(parsed);
   const response = await fetchImpl(url, {
     headers: {
       "User-Agent": "InkOS/1.6 material-ingestion",

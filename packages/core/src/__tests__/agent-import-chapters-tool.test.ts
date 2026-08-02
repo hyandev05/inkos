@@ -240,4 +240,42 @@ describe("import_chapters agent tool", () => {
     })).rejects.toThrow(/must match the active book/);
     expect(pipeline.importChapters).not.toHaveBeenCalled();
   });
+
+  it("blocks absolute host paths unless allowSystemPaths is set", async () => {
+    const outside = await mkdtemp(join(tmpdir(), "inkos-import-outside-"));
+    await writeFile(join(outside, "01_外面.md"), "宿主上的正文。", "utf-8");
+
+    try {
+      const tool = createImportChaptersTool(mockPipeline() as never, "harbor", root);
+      await expect(tool.execute("tool-import-abs", {
+        sourcePath: join(outside, "01_外面.md"),
+      })).rejects.toThrow(/INKOS_AGENT_ALLOW_SYSTEM_READ=1/);
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("reads absolute host paths when allowSystemPaths is enabled", async () => {
+    const outside = await mkdtemp(join(tmpdir(), "inkos-import-outside-ok-"));
+    await writeFile(join(outside, "01_外面.md"), "第一章 开局\n\n宿主上的正文。\n", "utf-8");
+
+    try {
+      const pipeline = mockPipeline();
+      const tool = createImportChaptersTool(pipeline as never, "harbor", root, { allowSystemPaths: true });
+      await tool.execute("tool-import-abs-ok", { sourcePath: join(outside, "01_外面.md") });
+      expect(pipeline.importChapters).toHaveBeenCalledTimes(1);
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks project secrets even when allowSystemPaths is enabled", async () => {
+    const pipeline = mockPipeline();
+    const tool = createImportChaptersTool(pipeline as never, "harbor", root, { allowSystemPaths: true });
+
+    await expect(tool.execute("tool-import-secret", {
+      sourcePath: join(root, ".inkos", "secrets.json"),
+    })).rejects.toThrow(/cannot read project secrets/);
+    expect(pipeline.importChapters).not.toHaveBeenCalled();
+  });
 });

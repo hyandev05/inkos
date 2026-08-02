@@ -7,10 +7,10 @@ import {
 } from "./service-detail-state";
 
 describe("rehydrateServiceConnectionStatus", () => {
-  it("loads saved key without probing models on page load", async () => {
+  it("loads saved-key status without probing models on page load", async () => {
     const fetchJsonImpl = vi.fn(async (path: string) => {
       if (path === "/services/openai/secret") {
-        return { apiKey: "sk-live" };
+        return { apiKeySet: true };
       }
       throw new Error(`unexpected path: ${path}`);
     });
@@ -28,7 +28,8 @@ describe("rehydrateServiceConnectionStatus", () => {
     expect(fetchJsonImpl).toHaveBeenCalledTimes(1);
     expect(fetchJsonImpl).toHaveBeenCalledWith("/services/openai/secret");
     expect(result).toMatchObject({
-      apiKey: "sk-live",
+      apiKey: "",
+      apiKeySet: true,
       detectedModel: "",
       detectedConfig: null,
       status: { state: "idle" },
@@ -71,6 +72,58 @@ describe("saveServiceConfig", () => {
         state: "error",
         message: "请先输入 API Key",
       },
+    });
+  });
+
+  it("keeps the stored key and skips the secret PUT when the key field is untouched", async () => {
+    const calls: string[] = [];
+    const bodies: unknown[] = [];
+    const fetchJsonImpl = vi.fn(async (path: string, init?: { body?: string }) => {
+      calls.push(path);
+      if (init?.body) bodies.push(JSON.parse(init.body));
+      if (path === "/services/openai/test") {
+        return {
+          ok: true,
+          models: [{ id: "gpt-5.5" }],
+          selectedModel: "gpt-5.5",
+          detected: { apiFormat: "chat", stream: true },
+        };
+      }
+      if (path === "/services/openai/secret") return { ok: true };
+      if (path === "/services/config") return { ok: true };
+      throw new Error(`unexpected path: ${path}`);
+    });
+
+    const result = await saveServiceConfig({
+      effectiveServiceId: "openai",
+      serviceId: "openai",
+      isCustom: false,
+      resolvedCustomName: "",
+      apiKey: "",
+      apiKeySet: true,
+      baseUrl: "",
+      apiFormat: "chat",
+      stream: true,
+      temperature: "0.7",
+      detectedModel: "",
+      fetchJsonImpl: fetchJsonImpl as never,
+    });
+
+    expect(calls).toEqual(["/services/openai/test", "/services/config"]);
+    expect(bodies).toEqual([
+      { apiKey: "", apiFormat: "chat", stream: true },
+      {
+        service: "openai",
+        defaultModel: "gpt-5.5",
+        services: [
+          { service: "openai", temperature: 0.7, apiFormat: "chat", stream: true },
+        ],
+      },
+    ]);
+    expect(result).toEqual({
+      detectedModel: "gpt-5.5",
+      detectedConfig: { apiFormat: "chat", stream: true },
+      status: { state: "connected", models: [{ id: "gpt-5.5" }] },
     });
   });
 

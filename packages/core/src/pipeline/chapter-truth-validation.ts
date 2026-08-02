@@ -1,4 +1,5 @@
 import type { AuditIssue, AuditResult } from "../agents/continuity.js";
+import { toEnCompatLanguage } from "../utils/language.js";
 import type { StateValidationAuthorityContext, ValidationResult, StateValidatorAgent } from "../agents/state-validator.js";
 import type { WriteChapterOutput, WriterAgent } from "../agents/writer.js";
 import type { BookConfig } from "../models/book.js";
@@ -55,7 +56,7 @@ export async function validateChapterTruthPersistence(params: {
       persistenceOutput.updatedState,
       params.previousTruth.oldHooks,
       persistenceOutput.updatedHooks,
-      params.language,
+      toEnCompatLanguage(params.language),
       params.authorityContext,
     );
   } catch (error) {

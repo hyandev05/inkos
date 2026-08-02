@@ -207,10 +207,30 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
 
     // 与真实 PipelineRunner.runWithAbortSignal 行为一致（入口检查一次 signal），
     // 并把 signal 记录下来供测试断言"任务控制器的中止信号传进了写作流程"。
-    runWithAbortSignal = vi.fn(async (signal: AbortSignal | undefined, task: () => Promise<unknown>) => {
+    // 中止发生在 task 执行中途时，竞速让任务 Promise 以中止原因拒绝——与真实
+    // 流水线在章节间检查中止信号的行为等价。
+    runWithAbortSignal = vi.fn((signal: AbortSignal | undefined, task: () => Promise<unknown>) => {
       pipelineAbortSignals.push(signal);
       signal?.throwIfAborted();
-      return task();
+      const pending = Promise.resolve(task());
+      if (!signal) return pending;
+      let settled = false;
+      return new Promise((resolve, reject) => {
+        pending.then(
+          (value) => { if (!settled) { settled = true; resolve(value); } },
+          (error) => { if (!settled) { settled = true; reject(error); } },
+        );
+        if (signal.aborted) {
+          settled = true;
+          reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+          return;
+        }
+        signal.addEventListener(
+          "abort",
+          () => { if (!settled) { settled = true; reject(signal.reason ?? new DOMException("Aborted", "AbortError")); } },
+          { once: true },
+        );
+      });
     });
 
     initBook = initBookMock;
@@ -257,6 +277,10 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
 
     get isRunning(): boolean {
       return this.running;
+    }
+
+    async waitForIdle(): Promise<void> {
+      return undefined;
     }
   }
 
@@ -356,6 +380,8 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     loadTranslationManifest: actual.loadTranslationManifest,
     runTranslationProject: actual.runTranslationProject,
     writeTranslationExport: actual.writeTranslationExport,
+    splitChapters: actual.splitChapters,
+    assertSafeRegexPattern: actual.assertSafeRegexPattern,
   };
 });
 
@@ -660,6 +686,57 @@ describe("createStudioServer daemon lifecycle", () => {
     await rm(root, { recursive: true, force: true });
     await rm(join(tmpdir(), "inkos-global.env"), { force: true });
   });
+
+  // 服务器只认"真实 propose_action 提案"时签发的单次确认令牌：模拟一轮 agent
+  // 运行产出 propose_action 事件，拿到令牌后供后续确认请求原样带回。
+  async function issueProposalConfirmToken(
+    app: { request: (input: string, init?: RequestInit) => Response | Promise<Response> },
+    sessionId: string,
+    intent: string,
+    sessionKind = "book",
+  ): Promise<string> {
+    // 服务器在 refresh 后用请求原始 sessionId 取 token（见 server.ts 提案分支），
+    // 因此这里只拦第一次 load（提案轮加载），后续重载走测试自身的 mock。
+    loadBookSessionMock.mockImplementationOnce(async (_root: string, sid: string) => ({
+      sessionId: sid,
+      bookId: null,
+      sessionKind,
+      title: null,
+      messages: [],
+      events: [],
+      draftRounds: [],
+      createdAt: 1,
+      updatedAt: 1,
+    }));
+    runAgentSessionMock.mockImplementationOnce(async (config: { onEvent?: (event: unknown) => void }) => {
+      config.onEvent?.({
+        type: "tool_execution_start",
+        toolCallId: "proposal-token-1",
+        toolName: "propose_action",
+        args: { action: intent, instruction: "proposed", title: "Proposal", summary: "S" },
+      });
+      config.onEvent?.({
+        type: "tool_execution_end",
+        toolCallId: "proposal-token-1",
+        toolName: "propose_action",
+        isError: false,
+        result: { details: { kind: "proposed_action", action: intent, instruction: "proposed" } },
+      });
+      return { responseText: "", messages: [] };
+    });
+    const proposalResponse = await app.request("http://localhost/api/v1/agent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ instruction: "帮我做点什么", sessionId, sessionKind }),
+    });
+    expect(proposalResponse.status).toBe(200);
+    const body = await proposalResponse.json() as { confirmToken?: string };
+    expect(typeof body.confirmToken).toBe("string");
+    // 提案轮确实调用过 runAgentSession；清掉历史，避免直接执行路径的
+    // "not toHaveBeenCalled" 断言被提案轮的调用污染。
+    runAgentSessionMock.mockClear();
+    return body.confirmToken as string;
+  }
 
   it("uses the real core bookId validator in the Studio safety mock", async () => {
     const { isSafeBookId } = await import("@actalk/inkos-core");
@@ -2279,7 +2356,7 @@ describe("createStudioServer daemon lifecycle", () => {
     });
   });
 
-  it("returns stored service secret for detail page rehydration", async () => {
+  it("returns only whether a stored service secret exists, never the key itself", async () => {
     loadSecretsMock.mockResolvedValue({
       services: {
         moonshot: { apiKey: "sk-moon" },
@@ -2291,7 +2368,10 @@ describe("createStudioServer daemon lifecycle", () => {
 
     const response = await app.request("http://localhost/api/v1/services/moonshot/secret");
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ apiKey: "sk-moon" });
+    await expect(response.json()).resolves.toEqual({ apiKeySet: true });
+
+    const missing = await app.request("http://localhost/api/v1/services/kkaiapi/secret");
+    await expect(missing.json()).resolves.toEqual({ apiKeySet: false });
   });
 
   it("rejects non-header-safe service secrets instead of persisting diagnostic text", async () => {
@@ -3006,6 +3086,60 @@ describe("createStudioServer daemon lifecycle", () => {
     await expect(response.json()).resolves.toEqual({ ok: true });
   });
 
+  it("blocks cross-origin browser requests while allowing loopback origins", async () => {
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const evil = await app.request("http://localhost/api/v1/project", {
+      headers: { Origin: "https://evil.example" },
+    });
+    expect(evil.status).toBe(403);
+    await expect(evil.json()).resolves.toMatchObject({ error: { code: "CROSS_ORIGIN_FORBIDDEN" } });
+
+    const rebind = await app.request("http://localhost/api/v1/project", {
+      headers: { Origin: "http://localhost.evil.example" },
+    });
+    expect(rebind.status).toBe(403);
+
+    const sameOrigin = await app.request("http://localhost/api/v1/project", {
+      headers: { Origin: "http://localhost" },
+    });
+    expect(sameOrigin.status).toBe(200);
+
+    const loopback = await app.request("http://localhost/api/v1/project", {
+      headers: { Origin: "http://127.0.0.1:5173" },
+    });
+    expect(loopback.status).toBe(200);
+
+    const noOrigin = await app.request("http://localhost/api/v1/project");
+    expect(noOrigin.status).toBe(200);
+  });
+
+  it("rejects session IDs that could smuggle path traversal", async () => {
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    for (const badId of ["../sneaky", "a%2Fb", "a/b", "..%2Fetc", "a..b", "."]) {
+      const response = await app.request(`http://localhost/api/v1/sessions/${encodeURIComponent(badId)}`, {
+        method: "DELETE",
+      });
+      expect([400, 404]).toContain(response.status);
+      expect(deleteBookSessionMock).not.toHaveBeenCalled();
+    }
+
+    const agent = await app.request("http://localhost/api/v1/agent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "../sneaky",
+        message: "hello",
+        source: "studio",
+      }),
+    });
+    expect(agent.status).toBe(400);
+    expect(runAgentSessionMock).not.toHaveBeenCalled();
+  });
+
   it("aborts a cached agent session through POST /api/v1/sessions/:sessionId/abort", async () => {
     abortAgentSessionMock.mockReturnValueOnce(true);
     const { createStudioServer } = await import("./server.js");
@@ -3138,6 +3272,7 @@ describe("createStudioServer daemon lifecycle", () => {
     });
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
+    const confirmToken = await issueProposalConfirmToken(app, "agent-session-1", "create_book");
 
     const response = await app.request("http://localhost/api/v1/agent", {
       method: "POST",
@@ -3148,6 +3283,7 @@ describe("createStudioServer daemon lifecycle", () => {
         sessionKind: "book-create",
         actionSource: "button",
         requestedIntent: "create_book",
+        confirmToken,
         actionPayload: {
           createBook: {
             title: "夜间派送",
@@ -3180,6 +3316,122 @@ describe("createStudioServer daemon lifecycle", () => {
     });
   });
 
+  it("rejects a confirmed production action whose token was never issued", async () => {
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const response = await app.request("http://localhost/api/v1/agent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        instruction: "创建《伪造确认》。",
+        sessionId: "agent-session-1",
+        sessionKind: "book-create",
+        actionSource: "button",
+        requestedIntent: "create_book",
+        confirmToken: "forged-token",
+        actionPayload: { createBook: { title: "伪造确认", language: "zh" } },
+      }),
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "CONFIRMATION_REQUIRED" },
+    });
+    // 生产动作没有执行
+    expect(initBookMock).not.toHaveBeenCalled();
+    expect(runAgentSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a confirmed production action whose token belongs to a different intent", async () => {
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+    const confirmToken = await issueProposalConfirmToken(app, "agent-session-1", "create_book");
+
+    const response = await app.request("http://localhost/api/v1/agent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        instruction: "连续写两章",
+        activeBookId: "demo-book",
+        sessionId: "agent-session-1",
+        sessionKind: "book",
+        actionSource: "button",
+        requestedIntent: "write_next",
+        confirmToken,
+        actionPayload: { writeNext: { chapterCount: 2 } },
+      }),
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "CONFIRMATION_REQUIRED" },
+    });
+    expect(writeChaptersMock).not.toHaveBeenCalled();
+  });
+
+  it("consumes the confirmation token exactly once", async () => {
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+    const confirmToken = await issueProposalConfirmToken(app, "agent-session-1", "create_book");
+
+    const first = await app.request("http://localhost/api/v1/agent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        instruction: "创建《一次消费》。",
+        sessionId: "agent-session-1",
+        sessionKind: "book-create",
+        actionSource: "button",
+        requestedIntent: "create_book",
+        confirmToken,
+        actionPayload: { createBook: { title: "一次消费", language: "zh" } },
+      }),
+    });
+    expect(first.status).toBe(200);
+
+    const second = await app.request("http://localhost/api/v1/agent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        instruction: "创建《二次使用》。",
+        sessionId: "agent-session-1",
+        sessionKind: "book-create",
+        actionSource: "button",
+        requestedIntent: "create_book",
+        confirmToken,
+        actionPayload: { createBook: { title: "二次使用", language: "zh" } },
+      }),
+    });
+
+    expect(second.status).toBe(400);
+    await expect(second.json()).resolves.toMatchObject({
+      error: { code: "CONFIRMATION_REQUIRED" },
+    });
+    expect(initBookMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not demand a confirmation token for a quick-action write-next", async () => {
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const response = await app.request("http://localhost/api/v1/agent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        instruction: "继续",
+        activeBookId: "demo-book",
+        sessionId: "agent-session-1",
+        sessionKind: "book",
+        actionSource: "quick-action",
+        requestedIntent: "write_next",
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(writeNextChapterMock).toHaveBeenCalledWith("demo-book");
+  });
+
   it("infers English before directly executing a confirmed short action", async () => {
     const shortSession = {
       sessionId: "short-en-session",
@@ -3195,6 +3447,7 @@ describe("createStudioServer daemon lifecycle", () => {
     loadBookSessionMock.mockResolvedValue(shortSession);
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
+    const confirmToken = await issueProposalConfirmToken(app, "short-en-session", "short_run", "short");
 
     const response = await app.request("http://localhost/api/v1/agent", {
       method: "POST",
@@ -3205,6 +3458,7 @@ describe("createStudioServer daemon lifecycle", () => {
         sessionKind: "short",
         actionSource: "button",
         requestedIntent: "short_run",
+        confirmToken,
         actionPayload: {
           shortRun: {
             direction: "an office suspense story about forged expense records",
@@ -3242,6 +3496,7 @@ describe("createStudioServer daemon lifecycle", () => {
     });
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
+    const confirmToken = await issueProposalConfirmToken(app, "long-task-session", "create_book");
 
     const pendingResponse = app.request("http://localhost/api/v1/agent", {
       method: "POST",
@@ -3252,6 +3507,7 @@ describe("createStudioServer daemon lifecycle", () => {
         sessionKind: "book-create",
         actionSource: "button",
         requestedIntent: "create_book",
+        confirmToken,
         actionPayload: { createBook: { title: "雨夜旧账", language: "zh" } },
       }),
     });
@@ -3293,6 +3549,7 @@ describe("createStudioServer daemon lifecycle", () => {
     });
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
+    const confirmToken = await issueProposalConfirmToken(app, "failed-task-session", "create_book");
 
     const response = await app.request("http://localhost/api/v1/agent", {
       method: "POST",
@@ -3303,6 +3560,7 @@ describe("createStudioServer daemon lifecycle", () => {
         sessionKind: "book-create",
         actionSource: "button",
         requestedIntent: "create_book",
+        confirmToken,
         actionPayload: { createBook: { title: "失败样本", language: "zh" } },
       }),
     });
@@ -3337,6 +3595,7 @@ describe("createStudioServer daemon lifecycle", () => {
     });
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
+    const confirmToken = await issueProposalConfirmToken(app, "refresh-task-session", "create_book");
 
     const pendingResponse = app.request("http://localhost/api/v1/agent", {
       method: "POST",
@@ -3347,6 +3606,7 @@ describe("createStudioServer daemon lifecycle", () => {
         sessionKind: "book-create",
         actionSource: "button",
         requestedIntent: "create_book",
+        confirmToken,
         actionPayload: { createBook: { title: "雨夜账本", language: "zh" } },
       }),
     });
@@ -3449,6 +3709,7 @@ describe("createStudioServer daemon lifecycle", () => {
     const handle = hangingShortFictionTool();
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
+    const confirmToken = await issueProposalConfirmToken(app, "instr-short-session", "short_run", "short");
 
     const instruction = "写一篇雨夜档案馆悬疑短篇。";
     const pendingTask = app.request("http://localhost/api/v1/agent", {
@@ -3460,6 +3721,7 @@ describe("createStudioServer daemon lifecycle", () => {
         sessionKind: "short",
         actionSource: "button",
         requestedIntent: "short_run",
+        confirmToken,
         actionPayload: { shortRun: { direction: "雨夜档案馆悬疑", chapters: 12, cover: false } },
       }),
     });
@@ -3505,6 +3767,7 @@ describe("createStudioServer daemon lifecycle", () => {
     const handle = hangingShortFictionTool();
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
+    const confirmToken = await issueProposalConfirmToken(app, "order-short-session", "short_run", "short");
 
     const instruction = "写一篇雨夜档案馆悬疑短篇。";
     const pendingTask = app.request("http://localhost/api/v1/agent", {
@@ -3516,6 +3779,7 @@ describe("createStudioServer daemon lifecycle", () => {
         sessionKind: "short",
         actionSource: "button",
         requestedIntent: "short_run",
+        confirmToken,
         actionPayload: { shortRun: { direction: "雨夜档案馆悬疑", chapters: 12, cover: false } },
       }),
     });
@@ -3574,6 +3838,7 @@ describe("createStudioServer daemon lifecycle", () => {
     }));
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
+    const confirmToken = await issueProposalConfirmToken(app, "fail-short-session", "short_run", "short");
 
     const instruction = "写一篇会失败的短篇。";
     const response = await app.request("http://localhost/api/v1/agent", {
@@ -3585,6 +3850,7 @@ describe("createStudioServer daemon lifecycle", () => {
         sessionKind: "short",
         actionSource: "button",
         requestedIntent: "short_run",
+        confirmToken,
         actionPayload: { shortRun: { direction: "会失败的短篇", chapters: 12, cover: false } },
       }),
     });
@@ -3619,6 +3885,7 @@ describe("createStudioServer daemon lifecycle", () => {
     });
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
+    const confirmToken = await issueProposalConfirmToken(app, "busy-task-session", "create_book");
 
     const pendingTask = app.request("http://localhost/api/v1/agent", {
       method: "POST",
@@ -3629,6 +3896,7 @@ describe("createStudioServer daemon lifecycle", () => {
         sessionKind: "book-create",
         actionSource: "button",
         requestedIntent: "create_book",
+        confirmToken,
         actionPayload: { createBook: { title: "第一本书", language: "zh" } },
       }),
     });
@@ -3688,6 +3956,9 @@ describe("createStudioServer daemon lifecycle", () => {
     const barrier = new Promise<void>((resolve) => {
       releaseBarrier = resolve;
     });
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+    const confirmToken = await issueProposalConfirmToken(app, "race-task-session", "create_book");
     loadBookSessionMock.mockImplementation(async () => {
       arrived += 1;
       if (arrived === 2) releaseBarrier();
@@ -3698,8 +3969,6 @@ describe("createStudioServer daemon lifecycle", () => {
     initBookMock.mockImplementation(async () => {
       await new Promise((resolve) => setTimeout(resolve, 25));
     });
-    const { createStudioServer } = await import("./server.js");
-    const app = createStudioServer(cloneProjectConfig() as never, root);
 
     const request = (title: string) => app.request("http://localhost/api/v1/agent", {
       method: "POST",
@@ -3710,6 +3979,7 @@ describe("createStudioServer daemon lifecycle", () => {
         sessionKind: "book-create",
         actionSource: "button",
         requestedIntent: "create_book",
+        confirmToken,
         actionPayload: { createBook: { title, language: "zh" } },
       }),
     });
@@ -3746,9 +4016,13 @@ describe("createStudioServer daemon lifecycle", () => {
       createdAt: 1,
       updatedAt: 1,
     });
-    runAgentSessionMock.mockResolvedValueOnce({ responseText: "任务还在后台跑。", messages: [] });
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
+    const confirmToken = await issueProposalConfirmToken(app, "parallel-chat-session", "create_book");
+    // 提案轮由 helper 自带的 runAgent 实现驱动；这个 Once 留给下面的聊天轮
+    //（若注册在 helper 之前，提案轮会先消费它，没有 propose_action 事件，
+    // token 就不会签发）。
+    runAgentSessionMock.mockResolvedValueOnce({ responseText: "任务还在后台跑。", messages: [] });
 
     const pendingTask = app.request("http://localhost/api/v1/agent", {
       method: "POST",
@@ -3759,6 +4033,7 @@ describe("createStudioServer daemon lifecycle", () => {
         sessionKind: "book-create",
         actionSource: "button",
         requestedIntent: "create_book",
+        confirmToken,
         actionPayload: { createBook: { title: "并行验证", language: "zh" } },
       }),
     });
@@ -3830,9 +4105,10 @@ describe("createStudioServer daemon lifecycle", () => {
     const core = await import("@actalk/inkos-core");
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
+    const confirmToken = await issueProposalConfirmToken(app, "tagged-log-session", "create_book");
 
     // 通过 /api/v1/events 订阅 SSE，收集服务端 broadcast 出来的事件。
-    const sseResponse = await app.request("http://localhost/api/v1/events");
+    const sseResponse = await app.request("http://localhost/api/v1/events?sessionId=tagged-log-session");
     const sseEvents: Array<{ event: string; data: Record<string, unknown> | null }> = [];
     const sseReader = sseResponse.body!.getReader();
     const ssePump = (async () => {
@@ -3885,6 +4161,7 @@ describe("createStudioServer daemon lifecycle", () => {
         sessionKind: "book-create",
         actionSource: "button",
         requestedIntent: "create_book",
+        confirmToken,
         actionPayload: { createBook: { title: "日志打标验证", language: "zh" } },
       }),
     });
@@ -3974,8 +4251,9 @@ describe("createStudioServer daemon lifecycle", () => {
     });
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
+    const confirmToken = await issueProposalConfirmToken(app, "bg-flag-session", "short_run", "short");
 
-    const sseResponse = await app.request("http://localhost/api/v1/events");
+    const sseResponse = await app.request("http://localhost/api/v1/events?sessionId=bg-flag-session");
     const sseEvents: Array<{ event: string; data: Record<string, unknown> | null }> = [];
     const sseReader = sseResponse.body!.getReader();
     const ssePump = (async () => {
@@ -4015,6 +4293,7 @@ describe("createStudioServer daemon lifecycle", () => {
         sessionKind: "short",
         actionSource: "button",
         requestedIntent: "short_run",
+        confirmToken,
         actionPayload: { shortRun: { direction: "冷库账本悬疑", cover: false } },
       }),
     });
@@ -4081,6 +4360,7 @@ describe("createStudioServer daemon lifecycle", () => {
     abortAgentSessionMock.mockReturnValue(true);
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
+    const confirmToken = await issueProposalConfirmToken(app, "chat-scope-session", "short_run", "short");
 
     const pendingTask = app.request("http://localhost/api/v1/agent", {
       method: "POST",
@@ -4091,6 +4371,7 @@ describe("createStudioServer daemon lifecycle", () => {
         sessionKind: "short",
         actionSource: "button",
         requestedIntent: "short_run",
+        confirmToken,
         actionPayload: { shortRun: { direction: "冷库账本悬疑", cover: false } },
       }),
     });
@@ -4140,6 +4421,7 @@ describe("createStudioServer daemon lifecycle", () => {
     }));
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
+    const confirmToken = await issueProposalConfirmToken(app, "deleted-task-session", "short_run", "short");
 
     const pendingTask = app.request("http://localhost/api/v1/agent", {
       method: "POST",
@@ -4150,6 +4432,7 @@ describe("createStudioServer daemon lifecycle", () => {
         sessionKind: "short",
         actionSource: "button",
         requestedIntent: "short_run",
+        confirmToken,
         actionPayload: { shortRun: { direction: "冷库账本悬疑", cover: false } },
       }),
     });
@@ -4217,6 +4500,7 @@ describe("createStudioServer daemon lifecycle", () => {
   function startShortRunTask(
     app: { request: (input: string, init?: RequestInit) => Response | Promise<Response> },
     sessionId: string,
+    confirmToken: string,
   ): Promise<Response> {
     return Promise.resolve(app.request("http://localhost/api/v1/agent", {
       method: "POST",
@@ -4227,6 +4511,7 @@ describe("createStudioServer daemon lifecycle", () => {
         sessionKind: "short",
         actionSource: "button",
         requestedIntent: "short_run",
+        confirmToken,
         actionPayload: { shortRun: { direction: "冷库账本悬疑", cover: false } },
       }),
     }));
@@ -4236,8 +4521,9 @@ describe("createStudioServer daemon lifecycle", () => {
     const window = taskInPersistWindow("window-abort-session");
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
+    const confirmToken = await issueProposalConfirmToken(app, "window-abort-session", "short_run", "short");
 
-    const pendingTask = startShortRunTask(app, "window-abort-session");
+    const pendingTask = startShortRunTask(app, "window-abort-session", confirmToken);
     await vi.waitFor(() => expect(appendManualSessionMessagesMock).toHaveBeenCalled());
     // 窗口成立：controller 已注册，但磁盘上还没有任务快照
     await expect(loadStudioTaskSnapshot(root, "window-abort-session")).resolves.toBeNull();
@@ -4259,8 +4545,9 @@ describe("createStudioServer daemon lifecycle", () => {
     const window = taskInPersistWindow("window-delete-session");
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
+    const confirmToken = await issueProposalConfirmToken(app, "window-delete-session", "short_run", "short");
 
-    const pendingTask = startShortRunTask(app, "window-delete-session");
+    const pendingTask = startShortRunTask(app, "window-delete-session", confirmToken);
     await vi.waitFor(() => expect(appendManualSessionMessagesMock).toHaveBeenCalled());
     await expect(loadStudioTaskSnapshot(root, "window-delete-session")).resolves.toBeNull();
 
@@ -4291,9 +4578,10 @@ describe("createStudioServer daemon lifecycle", () => {
       createdAt: 1,
       updatedAt: 1,
     };
-    loadBookSessionMock.mockResolvedValueOnce(playSession).mockResolvedValueOnce(playSession);
+    loadBookSessionMock.mockResolvedValue(playSession);
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
+    const confirmToken = await issueProposalConfirmToken(app, "play-session-1", "play_start", "play");
 
     const response = await app.request("http://localhost/api/v1/agent", {
       method: "POST",
@@ -4304,6 +4592,7 @@ describe("createStudioServer daemon lifecycle", () => {
         sessionKind: "play",
         actionSource: "button",
         requestedIntent: "play_start",
+        confirmToken,
         actionPayload: {
           playStart: {
             title: "旧档案馆之夜",
@@ -4387,9 +4676,10 @@ describe("createStudioServer daemon lifecycle", () => {
       createdAt: 1,
       updatedAt: 1,
     };
-    loadBookSessionMock.mockResolvedValueOnce(playSession).mockResolvedValueOnce(playSession);
+    loadBookSessionMock.mockResolvedValue(playSession);
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
+    const confirmToken = await issueProposalConfirmToken(app, "play-session-truncated", "play_start", "play");
 
     const response = await app.request("http://localhost/api/v1/agent", {
       method: "POST",
@@ -4400,6 +4690,7 @@ describe("createStudioServer daemon lifecycle", () => {
         sessionKind: "play",
         actionSource: "button",
         requestedIntent: "play_start",
+        confirmToken,
         actionPayload: {
           playStart: {
             title: "旧戏院夜巡",
@@ -4500,6 +4791,7 @@ describe("createStudioServer daemon lifecycle", () => {
     ]);
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
+    const confirmToken = await issueProposalConfirmToken(app, "agent-session-1", "write_next");
 
     const response = await app.request("http://localhost/api/v1/agent", {
       method: "POST",
@@ -4511,6 +4803,7 @@ describe("createStudioServer daemon lifecycle", () => {
         sessionKind: "book",
         actionSource: "button",
         requestedIntent: "write_next",
+        confirmToken,
         actionPayload: { writeNext: { chapterCount: 2 } },
       }),
     });
@@ -6369,6 +6662,41 @@ describe("createStudioServer daemon lifecycle", () => {
     await expect(access(exportedBody.outputPath)).resolves.toBeUndefined();
   });
 
+  it("rejects export output paths that escape the project root", async () => {
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+    const source = "# 第一章 雨夜\n\n雨水落在旧码头。\n";
+    const dataUrl = `data:text/markdown;base64,${Buffer.from(source, "utf-8").toString("base64")}`;
+
+    const upload = await app.request("http://localhost/api/v1/translations/upload", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename: "source.md", dataUrl }),
+    });
+    const uploaded = await upload.json() as { storedPath: string };
+    const create = await app.request("http://localhost/api/v1/translations/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        filePath: uploaded.storedPath,
+        sourceLanguage: "自动识别",
+        targetLanguage: "英语",
+        title: "Escape Translation",
+      }),
+    });
+    const created = await create.json() as { projectId: string };
+
+    for (const outputPath of ["../outside.md", "/tmp/inkos-pwned.md", "..%2Foutside.md"]) {
+      const escaped = await app.request(`http://localhost/api/v1/translations/${created.projectId}/export`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ format: "md", outputPath }),
+      });
+      expect(escaped.status).toBe(400);
+      await expect(escaped.json()).resolves.toMatchObject({ error: { code: "UNSUPPORTED_EXPORT_PATH" } });
+    }
+  });
+
   it("surfaces translation model failures without masking upstream provider errors", async () => {
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
@@ -6477,6 +6805,221 @@ describe("createStudioServer daemon lifecycle", () => {
         },
       ],
     });
+  });
+
+  it("rejects ReDoS split regex patterns with 400 UNSAFE_SPLIT_REGEX", async () => {
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+    await mkdir(join(root, "books", "demo-book"), { recursive: true });
+
+    for (const splitRegex of ["(a+)+$", "(a|aa)+", "(a*)*", "(?:ab|a)+", "(a|aa){1,}", "((a)+)+"]) {
+      const response = await app.request("http://localhost/api/v1/books/demo-book/import/chapters", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: "第一章 标题\n内容".repeat(50), splitRegex }),
+      });
+      expect(response.status, splitRegex).toBe(400);
+      await expect(response.json()).resolves.toMatchObject({ error: { code: "UNSAFE_SPLIT_REGEX" } });
+    }
+  });
+
+  it("lets only one concurrent daemon start through and 409s the second", async () => {
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const results = await Promise.all([
+      app.request("http://localhost/api/v1/daemon/start", { method: "POST" }),
+      app.request("http://localhost/api/v1/daemon/start", { method: "POST" }),
+    ]);
+    const statuses = results.map((r) => r.status).sort();
+    expect(statuses).toEqual([200, 409]);
+    expect(await (await app.request("http://localhost/api/v1/daemon")).json()).toMatchObject({
+      running: true,
+    });
+
+    const stopped = await app.request("http://localhost/api/v1/daemon/stop", { method: "POST" });
+    expect(stopped.status).toBe(200);
+    expect(await (await app.request("http://localhost/api/v1/daemon")).json()).toMatchObject({
+      running: false,
+    });
+  });
+
+  it("scopes SSE session events to the subscribing session only", async () => {
+    loadBookSessionMock.mockResolvedValue({
+      sessionId: "sse-scope-session",
+      bookId: null,
+      sessionKind: "book-create",
+      title: null,
+      messages: [],
+      events: [],
+      draftRounds: [],
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+    const confirmToken = await issueProposalConfirmToken(app, "sse-scope-session", "create_book");
+
+    // 全局订阅（不带 sessionId）：只收书级事件，不收会话内容
+    const globalSse = await app.request("http://localhost/api/v1/events");
+    const globalEvents: Array<{ event: string; data: Record<string, unknown> | null }> = [];
+    const globalReader = globalSse.body!.getReader();
+    const globalPump = (async () => {
+      const decoder = new TextDecoder();
+      let buffer = "";
+      try {
+        for (;;) {
+          const { done, value } = await globalReader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          let frameEnd = buffer.indexOf("\n\n");
+          while (frameEnd !== -1) {
+            const lines = buffer.slice(0, frameEnd).split("\n");
+            buffer = buffer.slice(frameEnd + 2);
+            const eventName = lines.find((line) => line.startsWith("event:"))?.slice("event:".length).trim();
+            const dataRaw = lines.find((line) => line.startsWith("data:"))?.slice("data:".length).trim();
+            if (eventName) {
+              globalEvents.push({ event: eventName, data: dataRaw ? JSON.parse(dataRaw) as Record<string, unknown> : null });
+            }
+            frameEnd = buffer.indexOf("\n\n");
+          }
+        }
+      } catch {
+        // abort 断开时的正常收尾
+      }
+    })();
+    await vi.waitFor(() => expect(globalEvents.some((entry) => entry.event === "ping")).toBe(true));
+
+    // 会话订阅
+    const sessionSse = await app.request("http://localhost/api/v1/events?sessionId=sse-scope-session");
+    const sessionEvents: Array<{ event: string; data: Record<string, unknown> | null }> = [];
+    const sessionReader = sessionSse.body!.getReader();
+    const sessionPump = (async () => {
+      const decoder = new TextDecoder();
+      let buffer = "";
+      try {
+        for (;;) {
+          const { done, value } = await sessionReader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          let frameEnd = buffer.indexOf("\n\n");
+          while (frameEnd !== -1) {
+            const lines = buffer.slice(0, frameEnd).split("\n");
+            buffer = buffer.slice(frameEnd + 2);
+            const eventName = lines.find((line) => line.startsWith("event:"))?.slice("event:".length).trim();
+            const dataRaw = lines.find((line) => line.startsWith("data:"))?.slice("data:".length).trim();
+            if (eventName) {
+              sessionEvents.push({ event: eventName, data: dataRaw ? JSON.parse(dataRaw) as Record<string, unknown> : null });
+            }
+            frameEnd = buffer.indexOf("\n\n");
+          }
+        }
+      } catch {
+        // abort 断开时的正常收尾
+      }
+    })();
+    await vi.waitFor(() => expect(sessionEvents.some((entry) => entry.event === "ping")).toBe(true));
+
+    // 跑一轮确认式任务：tool:start / tool:end 都带 sessionId，全局订阅收不到
+    const pendingTask = app.request("http://localhost/api/v1/agent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        instruction: "创建《SSE 范围验证》。",
+        sessionId: "sse-scope-session",
+        sessionKind: "book-create",
+        actionSource: "button",
+        requestedIntent: "create_book",
+        confirmToken,
+        actionPayload: { createBook: { title: "SSE 范围验证", language: "zh" } },
+      }),
+    });
+    await vi.waitFor(() => expect(sessionEvents.some((entry) => entry.event === "tool:start")).toBe(true));
+    expect(globalEvents.some((entry) => entry.event === "tool:start")).toBe(false);
+
+    await pendingTask;
+    await globalReader.cancel();
+    await sessionReader.cancel();
+    await Promise.all([globalPump, sessionPump]).catch(() => undefined);
+  });
+
+  it("aborts in-flight production tasks for a deleted book before removing its directory", async () => {
+    loadBookSessionMock.mockResolvedValue({
+      sessionId: "delete-race-session",
+      bookId: "delete-race-book",
+      sessionKind: "book",
+      title: null,
+      messages: [],
+      events: [],
+      draftRounds: [],
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    let resolveWrite!: (value: unknown) => void;
+    writeNextChapterMock.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveWrite = resolve;
+    }));
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+    await mkdir(join(root, "books", "delete-race-book"), { recursive: true });
+    await writeFile(join(root, "books", "delete-race-book", "book.json"), JSON.stringify({ id: "delete-race-book" }), "utf-8");
+    const confirmToken = await issueProposalConfirmToken(app, "delete-race-session", "write_next");
+
+    const pendingTask = app.request("http://localhost/api/v1/agent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        instruction: "继续写下一章",
+        activeBookId: "delete-race-book",
+        sessionId: "delete-race-session",
+        sessionKind: "book",
+        actionSource: "button",
+        requestedIntent: "write_next",
+        confirmToken,
+        actionPayload: { writeNext: { chapterCount: 1 } },
+      }),
+    });
+    await vi.waitFor(async () => {
+      const task = await loadStudioTaskSnapshot(root, "delete-race-session");
+      expect(task?.execution.status).toBe("running");
+    });
+
+    const deleted = await app.request("http://localhost/api/v1/books/delete-race-book", { method: "DELETE" });
+    expect(deleted.status).toBe(200);
+
+    // 任务被中止（终态），不再处于运行中；等待任务收尾后目录仍不存在
+    await vi.waitFor(async () => {
+      const task = await loadStudioTaskSnapshot(root, "delete-race-session");
+      expect(task?.execution.status).not.toBe("running");
+    });
+    await expect(pendingTask).resolves.toMatchObject({ status: expect.any(Number) });
+    await expect(access(join(root, "books", "delete-race-book"))).rejects.toThrow();
+    resolveWrite({});
+  });
+
+  it("rejects API requests without a bearer token when INKOS_STUDIO_TOKEN is set", async () => {
+    process.env.INKOS_STUDIO_TOKEN = "test-token-abc123";
+    try {
+      const { createStudioServer } = await import("./server.js");
+      const app = createStudioServer(cloneProjectConfig() as never, root);
+
+      const anon = await app.request("http://localhost/api/v1/project");
+      expect(anon.status).toBe(401);
+      await expect(anon.json()).resolves.toMatchObject({ error: { code: "UNAUTHORIZED" } });
+
+      const wrongQuery = await app.request("http://localhost/api/v1/project?token=wrong");
+      expect(wrongQuery.status).toBe(401);
+
+      const authed = await app.request("http://localhost/api/v1/project", {
+        headers: { Authorization: "Bearer test-token-abc123" },
+      });
+      expect(authed.status).toBe(200);
+
+      const sseQueryToken = await app.request("http://localhost/api/v1/events?token=test-token-abc123");
+      expect(sseQueryToken.status).toBe(200);
+    } finally {
+      delete process.env.INKOS_STUDIO_TOKEN;
+    }
   });
 
 });

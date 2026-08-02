@@ -27,73 +27,87 @@ export function buildWriterSystemPrompt(
   chapterNumber?: number,
   mode: "full" | "creative" = "full",
   fanficContext?: FanficContext,
-  languageOverride?: "zh" | "en",
+  languageOverride?: "zh" | "en" | "vi",
   inputProfile: "legacy" | "governed" = "legacy",
   lengthSpec?: LengthSpec,
 ): string {
   const isEnglish = (languageOverride ?? genreProfile.language) === "en";
+  const isVi = (languageOverride ?? genreProfile.language) === "vi";
   const governed = inputProfile === "governed";
-  const resolvedLengthSpec = lengthSpec ?? buildLengthSpec(book.chapterWordCount, isEnglish ? "en" : "zh");
+  const lengthLang = isVi || isEnglish ? "en" : "zh";
+  const resolvedLengthSpec = lengthSpec ?? buildLengthSpec(book.chapterWordCount, lengthLang);
 
-  const outputSection = isEnglish
+  const outputSection = isEnglish || isVi
     ? (mode === "creative"
-        ? buildEnglishCreativeOutputFormat(book, genreProfile, resolvedLengthSpec)
-        : buildEnglishOutputFormat(book, genreProfile, resolvedLengthSpec))
+      ? buildEnglishCreativeOutputFormat(book, genreProfile, resolvedLengthSpec)
+      : buildEnglishOutputFormat(book, genreProfile, resolvedLengthSpec))
     : (mode === "creative"
-        ? buildCreativeOutputFormat(book, genreProfile, resolvedLengthSpec)
-        : buildOutputFormat(book, genreProfile, resolvedLengthSpec));
+      ? buildCreativeOutputFormat(book, genreProfile, resolvedLengthSpec)
+      : buildOutputFormat(book, genreProfile, resolvedLengthSpec));
 
-  const sections = isEnglish
+  const sections = isEnglish || isVi
     ? [
-        buildEnglishGenreIntro(book, genreProfile),
-        buildEnglishCoreRules(book),
-        buildGovernedInputContract("en", governed),
-        buildChapterMemoContract("en", governed),
-        buildLengthGuidance(resolvedLengthSpec, "en"),
-        buildWritingCraftCard("en"),
-        buildProseExecutionRules("en"),
-        buildCreativeConstitution("en"),
-        buildImmersionPillars("en"),
-        buildGoldenOpeningDiscipline(chapterNumber, "en"),
-        buildGenreRules(genreProfile, genreBody),
-        buildProtagonistRules(bookRules),
-        buildNarrativePersonRule(bookRules, isEnglish ? "en" : "zh"),
-        buildBookRulesBody(bookRulesBody),
-        buildStyleGuide(styleGuide),
-        buildStyleFingerprint(styleFingerprint),
-        fanficContext ? buildFanficCanonSection(fanficContext.fanficCanon, fanficContext.fanficMode) : "",
-        fanficContext ? buildCharacterVoiceProfiles(fanficContext.fanficCanon) : "",
-        fanficContext ? buildFanficModeInstructions(fanficContext.fanficMode, fanficContext.allowedDeviations) : "",
-        // Pre-write checklist moved to style_guide.md (v10)
-        outputSection,
-      ]
+      buildEnglishGenreIntro(book, genreProfile),
+      buildEnglishCoreRules(book),
+      buildGovernedInputContract("en", governed),
+      buildChapterMemoContract("en", governed),
+      buildLengthGuidance(resolvedLengthSpec, "en"),
+      buildWritingCraftCard("en"),
+      buildProseExecutionRules("en"),
+      buildCreativeConstitution("en"),
+      buildImmersionPillars("en"),
+      buildGoldenOpeningDiscipline(chapterNumber, "en"),
+      buildGenreRules(genreProfile, genreBody),
+      buildProtagonistRules(bookRules),
+      buildNarrativePersonRule(bookRules, isEnglish ? "en" : "zh"),
+      buildBookRulesBody(bookRulesBody),
+      buildStyleGuide(styleGuide),
+      buildStyleFingerprint(styleFingerprint),
+      fanficContext ? buildFanficCanonSection(fanficContext.fanficCanon, fanficContext.fanficMode) : "",
+      fanficContext ? buildCharacterVoiceProfiles(fanficContext.fanficCanon) : "",
+      fanficContext ? buildFanficModeInstructions(fanficContext.fanficMode, fanficContext.allowedDeviations) : "",
+      // Pre-write checklist moved to style_guide.md (v10)
+      outputSection,
+    ]
     : [
-        buildGenreIntro(book, genreProfile),
-        buildCoreRules(resolvedLengthSpec),
-        buildGovernedInputContract("zh", governed),
-        buildChapterMemoContract("zh", governed),
-        buildLengthGuidance(resolvedLengthSpec, "zh"),
-        buildWritingCraftCard("zh"),
-        buildProseExecutionRules("zh"),
-        buildCreativeConstitution("zh"),
-        buildImmersionPillars("zh"),
-        buildGoldenOpeningDiscipline(chapterNumber, "zh"),
-        buildGoldenChaptersRules(chapterNumber, isEnglish ? "en" : "zh"),
-        bookRules?.enableFullCastTracking ? buildFullCastTracking() : "",
-        buildGenreRules(genreProfile, genreBody),
-        buildProtagonistRules(bookRules),
-        buildNarrativePersonRule(bookRules, isEnglish ? "en" : "zh"),
-        buildBookRulesBody(bookRulesBody),
-        buildStyleGuide(styleGuide),
-        buildStyleFingerprint(styleFingerprint),
-        fanficContext ? buildFanficCanonSection(fanficContext.fanficCanon, fanficContext.fanficMode) : "",
-        fanficContext ? buildCharacterVoiceProfiles(fanficContext.fanficCanon) : "",
-        fanficContext ? buildFanficModeInstructions(fanficContext.fanficMode, fanficContext.allowedDeviations) : "",
-        // Pre-write checklist moved to style_guide.md (v10)
-        outputSection,
-      ];
+      buildGenreIntro(book, genreProfile),
+      buildCoreRules(resolvedLengthSpec),
+      buildGovernedInputContract("zh", governed),
+      buildChapterMemoContract("zh", governed),
+      buildLengthGuidance(resolvedLengthSpec, "zh"),
+      buildWritingCraftCard("zh"),
+      buildProseExecutionRules("zh"),
+      buildCreativeConstitution("zh"),
+      buildImmersionPillars("zh"),
+      buildGoldenOpeningDiscipline(chapterNumber, "zh"),
+      buildGoldenChaptersRules(chapterNumber, isEnglish ? "en" : "zh"),
+      bookRules?.enableFullCastTracking ? buildFullCastTracking() : "",
+      buildGenreRules(genreProfile, genreBody),
+      buildProtagonistRules(bookRules),
+      buildNarrativePersonRule(bookRules, isEnglish ? "en" : "zh"),
+      buildBookRulesBody(bookRulesBody),
+      buildStyleGuide(styleGuide),
+      buildStyleFingerprint(styleFingerprint),
+      fanficContext ? buildFanficCanonSection(fanficContext.fanficCanon, fanficContext.fanficMode) : "",
+      fanficContext ? buildCharacterVoiceProfiles(fanficContext.fanficCanon) : "",
+      fanficContext ? buildFanficModeInstructions(fanficContext.fanficMode, fanficContext.allowedDeviations) : "",
+      // Pre-write checklist moved to style_guide.md (v10)
+      outputSection,
+    ];
 
-  return sections.filter(Boolean).join("\n\n");
+  const basePrompt = sections.filter(Boolean).join("\n\n");
+  if (isVi) {
+    return `${basePrompt}
+
+## LANGUAGE OVERRIDE — output language is VIETNAMESE (Tiếng Việt)
+
+You MUST write every piece of generated content in natural, native Vietnamese:
+- Chapter prose, narration, dialogue, summaries, and character/place names in Vietnamese (with proper Vietnamese diacritics).
+- Keep proper nouns and brand names in their original form when they have no natural Vietnamese translation.
+- Do NOT output in Chinese; do NOT default to English for the story text.
+- You may read and reason in any language, but everything you produce must be Vietnamese.`;
+  }
+  return basePrompt;
 }
 
 // ---------------------------------------------------------------------------

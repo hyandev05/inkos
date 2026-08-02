@@ -1,4 +1,5 @@
 import { BaseAgent } from "./base.js";
+import { toEnCompatLanguage } from "../utils/language.js";
 import type { GenreProfile } from "../models/genre-profile.js";
 import type { BookRules } from "../models/book-rules.js";
 import type { FanficMode } from "../models/book.js";
@@ -274,11 +275,11 @@ description 中要明确引用 hook_id，并把状态列中 stale / blocked 的�
       const severity = fanficConfig.severityOverrides.get(id) ?? "warning";
       const baseNote = language === "en"
         ? {
-            34: "Check whether dialogue tics, speaking style, and behavior remain consistent with the character dossiers in fanfic_canon.md. Deviations need clear situational motivation.",
-            35: "Check whether the chapter violates world rules documented in fanfic_canon.md (geography, power system, faction relations).",
-            36: "Check whether relationship beats remain plausible and aligned with, or meaningfully develop from, the key relationships documented in fanfic_canon.md.",
-            37: "Check whether the chapter contradicts the key event timeline in fanfic_canon.md.",
-          }[id]
+          34: "Check whether dialogue tics, speaking style, and behavior remain consistent with the character dossiers in fanfic_canon.md. Deviations need clear situational motivation.",
+          35: "Check whether the chapter violates world rules documented in fanfic_canon.md (geography, power system, faction relations).",
+          36: "Check whether relationship beats remain plausible and aligned with, or meaningfully develop from, the key relationships documented in fanfic_canon.md.",
+          37: "Check whether the chapter contradicts the key event timeline in fanfic_canon.md.",
+        }[id]
         : FANFIC_DIMENSIONS.find((dimension) => dimension.id === id)?.baseNote;
 
       return baseNote
@@ -440,7 +441,7 @@ export class ContinuityAuditor extends BaseAgent {
       ? styleGuideRaw
       : (legacyRulesBody || "(无文风指南)");
 
-    const resolvedLanguage = bookLanguage ?? gp.language;
+    const resolvedLanguage = toEnCompatLanguage(bookLanguage ?? gp.language);
     const isEnglish = resolvedLanguage === "en";
     const fanficMode = hasFanficCanon ? (bookRules?.fanficMode as FanficMode | undefined) : undefined;
     const dimensions = buildDimensionList(gp, bookRules, resolvedLanguage, hasParentCanon, fanficMode);
@@ -699,13 +700,13 @@ ${chapterContent}`;
         while ((match = issuePattern.exec(issuesMatch[1]!)) !== null) {
           try {
             const issue = JSON.parse(match[0]);
-	            issues.push({
-	              severity: issue.severity ?? "warning",
-	              category: issue.category ?? (language === "en" ? "Uncategorized" : "未分类"),
-	              description: issue.description ?? "",
-	              suggestion: issue.suggestion ?? "",
-	              repairScope: normalizeRepairScope(issue.repair_scope ?? issue.repairScope),
-	            });
+            issues.push({
+              severity: issue.severity ?? "warning",
+              category: issue.category ?? (language === "en" ? "Uncategorized" : "未分类"),
+              description: issue.description ?? "",
+              suggestion: issue.suggestion ?? "",
+              repairScope: normalizeRepairScope(issue.repair_scope ?? issue.repairScope),
+            });
           } catch {
             // skip malformed individual issue
           }
@@ -802,13 +803,13 @@ ${overrides}\n`;
       return {
         passed: Boolean(parsed.passed ?? false),
         issues: Array.isArray(parsed.issues)
-	          ? parsed.issues.map((i: Record<string, unknown>) => ({
-	              severity: (i.severity as string) ?? "warning",
-	              category: (i.category as string) ?? (language === "en" ? "Uncategorized" : "未分类"),
-	              description: (i.description as string) ?? "",
-	              suggestion: (i.suggestion as string) ?? "",
-	              repairScope: normalizeRepairScope(i.repair_scope ?? i.repairScope),
-	            }))
+          ? parsed.issues.map((i: Record<string, unknown>) => ({
+            severity: (i.severity as string) ?? "warning",
+            category: (i.category as string) ?? (language === "en" ? "Uncategorized" : "未分类"),
+            description: (i.description as string) ?? "",
+            suggestion: (i.suggestion as string) ?? "",
+            repairScope: normalizeRepairScope(i.repair_scope ?? i.repairScope),
+          }))
           : [],
         summary: String(parsed.summary ?? ""),
         overallScore,

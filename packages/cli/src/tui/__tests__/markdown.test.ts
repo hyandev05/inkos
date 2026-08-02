@@ -61,4 +61,39 @@ describe("renderMarkdown", () => {
     const result = renderMarkdown("plain text");
     expect(result).toContain("plain text");
   });
+
+  it("strips CSI color codes from model output", () => {
+    const result = renderMarkdown("文本\x1b[31m红色\x1b[0m后面");
+    expect(result).not.toContain("\x1b[31m");
+    expect(result).not.toContain("\x1b[0m");
+    expect(result).toContain("红色");
+    expect(result).toContain("后面");
+  });
+
+  it("strips OSC payloads (OSC 52 clipboard, OSC 8 hyperlinks) entirely", () => {
+    const result = renderMarkdown("开头\x1b]52;c;cGF5bG9hZA==\x07结尾");
+    expect(result).toContain("开头");
+    expect(result).toContain("结尾");
+    expect(result).not.toMatch(/\x1b]/);
+    expect(result).not.toContain("cGF5bG9hZA==");
+
+    const osc8 = renderMarkdown("链接\x1b]8;;https://evil.example\x1b\\文本\x1b]8;;\x1b\\后面");
+    expect(osc8).toContain("链接");
+    expect(osc8).toContain("后面");
+    expect(osc8).not.toMatch(/\x1b]/);
+    expect(osc8).not.toContain("evil.example");
+  });
+
+  it("strips bare ESC + byte sequences (ESC M reverse line feed)", () => {
+    const result = renderMarkdown("上行\x1bM下行");
+    expect(result).not.toContain("\x1b");
+    expect(result).toContain("上行");
+    expect(result).toContain("下行");
+  });
+
+  it("keeps its own bold markers after stripping foreign escapes", () => {
+    const result = renderMarkdown("**加粗**\x1b[31m红\x1b[0m");
+    expect(result).toContain("\x1b[1m加粗\x1b[22m");
+    expect(result).not.toContain("\x1b[31m");
+  });
 });

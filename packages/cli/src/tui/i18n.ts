@@ -1,6 +1,6 @@
 import type { ChatDepth } from "./chat-depth.js";
 
-export type TuiLocale = "zh-CN" | "en";
+export type TuiLocale = "zh-CN" | "en" | "vi";
 
 export interface TuiCopy {
   readonly locale: TuiLocale;
@@ -195,6 +195,75 @@ const EN: TuiCopy = {
   },
 };
 
+const VI: TuiCopy = {
+  locale: "vi",
+  labels: {
+    project: "Dự án",
+    book: "Tác phẩm",
+    depth: "Độ sâu",
+    session: "Phiên",
+    messageCount: (count) => `${count} tin nhắn`,
+    stage: "Giai đoạn",
+    mode: "Chế độ",
+    model: "Mô hình",
+    error: "Lỗi",
+    recent: "Gần đây",
+    pending: "Chờ xác nhận",
+    draft: "Nháp",
+    ready: "Sẵn sàng",
+    none: "không có",
+    notConfigured: "chưa cấu hình",
+    unknown: "không xác định",
+  },
+  modeLabels: {
+    auto: "tự động",
+    semi: "bán tự động",
+    manual: "thủ công",
+  },
+  composer: {
+    placeholder: "Yêu cầu InkOS viết, sửa hoặc giải thích…",
+    emptyConversation: "Bắt đầu bằng cách yêu cầu InkOS làm gì đó.",
+    helper: "Enter để gửi • /new mô tả ý tưởng • /write • /rewrite • /truth • /export • /depth • /help",
+    submitting: "Đang xử lý…",
+    failed: "Yêu cầu trước đó thất bại",
+    ready: "Sẵn sàng",
+  },
+  notes: {
+    help: "Lệnh: /new (mô tả ý tưởng), /write, /books, /rewrite, /focus, /truth, /rename, /replace, /export, /status, /clear, /depth, /quit. Các thao tác viết và quản lý dự án khác giao trực tiếp bằng ngôn ngữ tự nhiên cho agent.",
+    status: (stage, mode) => `Trạng thái: ${stage} (${mode}).`,
+    config: "Tương tác /config chưa có trong dashboard Ink. Hãy dùng inkos config set-global.",
+    depthSet: (depthLabel) => `Đã chuyển độ sâu suy nghĩ sang ${depthLabel}.`,
+    newBookGuide: "Bắt đầu hình thành tác phẩm mới. Mô tả trực tiếp ý tưởng của bạn — thể loại, thế giới, nhân vật chính, mâu thuẫn cốt lõi đều được. AI sẽ hướng dẫn từng bước và tự gọi khả năng tạo tác phẩm khi đủ thông tin.",
+    noLlmConfig: "Không tìm thấy cấu hình LLM.",
+    setupProvider: "Hãy cấu hình nhà cung cấp API trước.",
+  },
+  roles: {
+    user: "Bạn",
+    assistant: "InkOS",
+    system: "Hệ thống",
+  },
+  activity: {
+    thinking: "đang suy nghĩ",
+    checking: "đang kiểm tra",
+    writing: "đang viết",
+    reviewing: "đang duyệt",
+    updating: "đang cập nhật",
+  },
+  stageLabels: {
+    completed: "hoàn thành",
+    failed: "thất bại",
+    blocked: "bị chặn",
+    waitingHuman: "chờ quyết định của bạn",
+    pausedByUser: "bạn đã tạm dừng",
+    readyToContinue: "sẵn sàng tiếp tục",
+  },
+  depthLabels: {
+    light: "nhẹ",
+    normal: "tiêu chuẩn",
+    deep: "sâu",
+  },
+};
+
 export function resolveTuiLocale(
   env: NodeJS.ProcessEnv = process.env,
   preferredLanguage?: string,
@@ -214,7 +283,9 @@ export function resolveTuiLocale(
 }
 
 export function getTuiCopy(locale: TuiLocale): TuiCopy {
-  return locale === "en" ? EN : ZH_CN;
+  if (locale === "en") return EN;
+  if (locale === "vi") return VI;
+  return ZH_CN;
 }
 
 export function normalizeStageLabel(label: string, copy: TuiCopy): string {
@@ -272,6 +343,10 @@ function normalizeLocale(value: string | undefined): TuiLocale | undefined {
 
   if (normalized.startsWith("en")) {
     return "en";
+  }
+
+  if (normalized.startsWith("vi")) {
+    return "vi";
   }
 
   return undefined;

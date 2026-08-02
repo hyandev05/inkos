@@ -759,6 +759,7 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
         requestedIntent: details.action,
         actionPayload: details.actionPayload,
         requestedSkills: details.requestedSkills,
+        confirmToken: details.confirmToken,
       });
       return;
     }
@@ -771,6 +772,7 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
       requestedIntent: details.action,
       actionPayload: details.actionPayload,
       requestedSkills: details.requestedSkills,
+      confirmToken: details.confirmToken,
     });
   };
 

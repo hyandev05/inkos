@@ -1,4 +1,5 @@
 import { BaseAgent } from "./base.js";
+import { toEnCompatLanguage } from "../utils/language.js";
 import type { BookConfig } from "../models/book.js";
 import type { GenreProfile } from "../models/genre-profile.js";
 import type { ContextPackage, RuleStack } from "../models/input-governance.js";
@@ -43,7 +44,7 @@ export class ChapterAnalyzerAgent extends BaseAgent {
     const { book, bookDir, chapterNumber, chapterContent, chapterTitle } = input;
     const { profile: genreProfile, body: genreBody } =
       await readGenreProfile(this.ctx.projectRoot, book.genre);
-    const resolvedLanguage = book.language ?? genreProfile.language;
+    const resolvedLanguage = toEnCompatLanguage(book.language ?? genreProfile.language);
 
     // Read current truth files (same set as writer.ts). Phase 5: prefer the
     // new prose outline (story_frame / volume_map) and roles/ directory.
@@ -83,12 +84,12 @@ export class ChapterAnalyzerAgent extends BaseAgent {
       : undefined;
     const hooksWorkingSet = governedMode && input.contextPackage
       ? buildGovernedHookWorkingSet({
-          hooksMarkdown: hooks,
-          contextPackage: input.contextPackage,
-          chapterIntent: input.chapterIntent,
-          chapterNumber,
-          language: resolvedLanguage,
-        })
+        hooksMarkdown: hooks,
+        contextPackage: input.contextPackage,
+        chapterIntent: input.chapterIntent,
+        chapterNumber,
+        language: resolvedLanguage,
+      })
       : hooks;
     const subplotWorkingSet = governedMode
       ? filterSubplots(subplotBoard)
@@ -98,11 +99,11 @@ export class ChapterAnalyzerAgent extends BaseAgent {
       : emotionalArcs;
     const matrixWorkingSet = governedMode && input.chapterIntent && input.contextPackage
       ? buildGovernedCharacterMatrixWorkingSet({
-          matrixMarkdown: characterMatrix,
-          chapterIntent: input.chapterIntent,
-          contextPackage: input.contextPackage,
-          protagonistName: bookRules?.protagonist?.name,
-        })
+        matrixMarkdown: characterMatrix,
+        chapterIntent: input.chapterIntent,
+        contextPackage: input.contextPackage,
+        protagonistName: bookRules?.protagonist?.name,
+      })
       : characterMatrix;
     const reducedControlBlock = governedMode && input.chapterIntent && input.contextPackage && input.ruleStack
       ? this.buildReducedControlBlock(input.chapterIntent, input.contextPackage, input.ruleStack, resolvedLanguage)
@@ -587,13 +588,13 @@ ${overrides}\n`;
 
     const header = language === "en"
       ? [
-          "| Chapter | Title | Characters | Key Events | State Changes | Hook Activity | Mood | Chapter Type |",
-          "| --- | --- | --- | --- | --- | --- | --- | --- |",
-        ]
+        "| Chapter | Title | Characters | Key Events | State Changes | Hook Activity | Mood | Chapter Type |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
+      ]
       : [
-          "| 章节 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 |",
-          "| --- | --- | --- | --- | --- | --- | --- | --- |",
-        ];
+        "| 章节 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
+      ];
 
     const rows = summaries.map((summary) => [
       summary.chapter,

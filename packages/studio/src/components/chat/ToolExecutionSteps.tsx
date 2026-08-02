@@ -150,6 +150,7 @@ export interface ProposedActionDetails {
   readonly instruction?: string;
   readonly requestedSkills?: ReadonlyArray<string>;
   readonly actionPayload?: ChatActionPayload;
+  readonly confirmToken?: string;
 }
 
 function stringField(record: Record<string, unknown>, key: string): string | undefined {
@@ -492,6 +493,7 @@ export function getProposedActionDetails(exec: ToolExecution): ProposedActionDet
     instruction,
     requestedSkills: stringArrayField(record, "requestedSkills"),
     actionPayload: actionPayloadField(record),
+    confirmToken: exec.confirmToken,
   };
 }
 

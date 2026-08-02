@@ -1,6 +1,7 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { BaseAgent } from "./base.js";
+import { toEnCompatLanguage } from "../utils/language.js";
 import type { BookConfig } from "../models/book.js";
 import { readBookRules as readAuthoritativeBookRules } from "./rules-reader.js";
 import {
@@ -77,6 +78,7 @@ export class PlannerAgent extends BaseAgent {
     const storyDir = join(input.bookDir, "story");
     const runtimeDir = join(storyDir, "runtime");
     await mkdir(runtimeDir, { recursive: true });
+    const lang = toEnCompatLanguage(input.book.language);
 
     const seedMaterials = await loadPlanningSeedMaterials({
       bookDir: input.bookDir,
@@ -144,7 +146,7 @@ export class PlannerAgent extends BaseAgent {
       // Phase hotfix 4: thread book language through so the planner uses
       // English prompts (system + user template + golden opening guidance)
       // for English books instead of always-Chinese.
-      language: input.book.language ?? "zh",
+      language: lang,
     });
 
     // memo.goal is LLM-produced and specific (<=50 chars, validated).
@@ -156,9 +158,9 @@ export class PlannerAgent extends BaseAgent {
     const intentMarkdown = this.renderIntentMarkdown(
       intent,
       memo,
-      input.book.language ?? "zh",
-      renderHookSnapshot(memorySelection.hooks, input.book.language ?? "zh"),
-      renderSummarySnapshot(memorySelection.summaries, input.book.language ?? "zh"),
+      lang,
+      renderHookSnapshot(memorySelection.hooks, lang),
+      renderSummarySnapshot(memorySelection.summaries, lang),
       activeHookCount,
     );
     await writeFile(runtimePath, intentMarkdown, "utf-8");

@@ -3,6 +3,7 @@ import { findProjectRoot, log, logError } from "../utils.js";
 import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { access } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { ensureProjectDirectoryInitialized } from "../project-bootstrap.js";
 
@@ -117,9 +118,12 @@ export async function resolveStudioLaunch(root: string): Promise<StudioLaunchSpe
 
 export async function launchStudioWorkbench(root: string, port: string): Promise<void> {
   const prepared = await prepareStudioRoot(root);
+  // 每次启动生成一个一次性令牌：服务端要求 Bearer 令牌时才启用鉴权（否则行为
+  // 与以往一致），令牌通过浏览器 URL 传给 SPA，SPA 捕获后存 sessionStorage。
+  const token = randomBytes(24).toString("hex");
   const url = prepared.initialized
-    ? `http://localhost:${port}#/services`
-    : `http://localhost:${port}`;
+    ? `http://localhost:${port}?token=${token}#/services`
+    : `http://localhost:${port}?token=${token}`;
   const launch = await resolveStudioLaunch(root);
 
   if (!launch) {
@@ -136,7 +140,7 @@ export async function launchStudioWorkbench(root: string, port: string): Promise
   const child = spawn(launch.command, launch.args, {
     cwd: root,
     stdio: "inherit",
-    env: { ...process.env, INKOS_STUDIO_PORT: port },
+    env: { ...process.env, INKOS_STUDIO_PORT: port, INKOS_STUDIO_TOKEN: token },
   });
 
   child.on("error", (e) => {

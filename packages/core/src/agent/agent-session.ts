@@ -16,6 +16,7 @@ import type {
 } from "@mariozechner/pi-ai";
 import type { PipelineRunner } from "../pipeline/runner.js";
 import { assertWithinContextWindow, estimatePiContextTokens } from "../llm/provider.js";
+import { toEnCompatLanguage } from "../utils/language.js";
 import { buildAgentSystemPrompt } from "./agent-system-prompt.js";
 import {
   createPatchChapterTextTool,
@@ -590,8 +591,8 @@ function assistantErrorMessage(message: AssistantMessage | undefined): string | 
   return message &&
     (message.stopReason === "error" || message.stopReason === "aborted") &&
     message.errorMessage
-      ? message.errorMessage
-      : undefined;
+    ? message.errorMessage
+    : undefined;
 }
 
 function convertAgentMessagesForModel(messages: AgentMessage[], model: Model<Api>): Message[] {
@@ -750,16 +751,16 @@ function agentMessagesToPlain(
   for (const msg of messages) {
     if (!msg || typeof msg !== "object" || !("role" in msg)) continue;
 
-    const m = msg as { role: string; [k: string]: any };
+    const m = msg as { role: string;[k: string]: any };
 
     if (m.role === "user") {
       const content = typeof m.content === "string"
         ? m.content
         : Array.isArray(m.content)
           ? m.content
-              .filter((c: any) => c.type === "text")
-              .map((c: any) => c.text)
-              .join("")
+            .filter((c: any) => c.type === "text")
+            .map((c: any) => c.text)
+            .join("")
           : "";
       if (content) out.push({ role: "user", content });
     } else if (m.role === "assistant") {
@@ -819,7 +820,7 @@ function createAgentToolsForMode(params: CreateAgentToolsForModeParams) {
 }
 
 function createModeTools(params: CreateAgentToolsForModeParams) {
-  const lang = params.language === "en" ? "en" : "zh";
+  const lang = params.language === "en" ? "en" : params.language === "vi" ? "vi" : "zh";
   const subAgentTool = createSubAgentTool(params.pipeline, params.bookId, params.projectRoot, {
     actionPayload: params.actionPayload,
     language: lang,
@@ -831,7 +832,9 @@ function createModeTools(params: CreateAgentToolsForModeParams) {
   const researchTool = createResearchWebTool(params.projectRoot);
   const materialTool = createIngestMaterialTool(params.projectRoot);
   const materialRetrievalTool = createRetrieveMaterialTool(params.projectRoot);
-  const importChaptersTool = createImportChaptersTool(params.pipeline, params.bookId, params.projectRoot);
+  const importChaptersTool = createImportChaptersTool(params.pipeline, params.bookId, params.projectRoot, {
+    allowSystemPaths: params.allowSystemFileRead,
+  });
   const isConfirmed = (
     intent: NonNullable<AgentSessionConfig["requestedIntent"]>,
   ): boolean => {
@@ -890,7 +893,7 @@ function createModeTools(params: CreateAgentToolsForModeParams) {
       llm,
       proposeActionTool: proposalTool,
       confirmedIntent: params.requestedIntent,
-      language: lang,
+      language: toEnCompatLanguage(lang),
     });
   }
 
@@ -1101,10 +1104,10 @@ async function runAgentSessionUnlocked(
     });
     const intentSkillTool = allowIntentSkillSelection
       ? createUseSkillTool({
-          registry: skillRegistry,
-          disabledSkillIds: skillResolution.disabledSkillIds,
-          onActivate: (skillId) => turnSkillIds.add(skillId),
-        })
+        registry: skillRegistry,
+        disabledSkillIds: skillResolution.disabledSkillIds,
+        onActivate: (skillId) => turnSkillIds.add(skillId),
+      })
       : undefined;
     const agentTools = createAgentToolsForMode({
       pipeline,

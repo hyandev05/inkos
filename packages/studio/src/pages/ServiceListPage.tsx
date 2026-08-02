@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Check, Eye, EyeOff, Loader2, Plus, Search, X } from "lucide-react";
 import { GROUP_ORDER, getGroupDescription, getGroupLabel, getGroupShortLabel } from "../constants/service-groups";
+import { localizeServiceLabel } from "../constants/service-labels";
 import { tr } from "../lib/app-language";
 import { fetchJson } from "../hooks/use-api";
 import { useServiceStore } from "../store/service";
@@ -38,11 +39,11 @@ function ServiceCard({ svc, onClick }: { svc: ServiceInfo; onClick: () => void }
     >
       <button onClick={onClick} className="flex flex-1 flex-col gap-2 text-left">
         <div className="flex items-center justify-between gap-3">
-          <span className="truncate text-sm font-medium">{svc.label}</span>
+          <span className="truncate text-sm font-medium">{localizeServiceLabel(svc.service, svc.label)}</span>
           <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${svc.connected ? "bg-emerald-500" : "bg-muted-foreground/30"}`} />
         </div>
         <span className="text-xs text-muted-foreground/60">
-          {svc.connected ? tr("已连接", "Connected") : tr("未配置", "Not configured")}
+          {svc.connected ? tr("已连接", "Connected", "Đã kết nối") : tr("未配置", "Not configured", "Chưa cấu hình")}
         </span>
       </button>
       {quickLinks.length > 0 && (
@@ -74,6 +75,7 @@ function CoverConfigCard() {
   const [model, setModel] = useState("gpt-image-2");
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
+  const [apiKeySet, setApiKeySet] = useState(false);
   const [showKey, setShowKey] = useState(false);
   const [status, setStatus] = useState<"idle" | "loading" | "saving" | "saved" | "error">("loading");
   const [message, setMessage] = useState("");
@@ -96,7 +98,7 @@ function CoverConfigCard() {
       .catch((error) => {
         if (cancelled) return;
         setStatus("error");
-        setMessage(error instanceof Error ? error.message : tr("读取封面配置失败", "Failed to load cover config"));
+        setMessage(error instanceof Error ? error.message : tr("读取封面配置失败", "Failed to load cover config", "Không đọc được cấu hình bìa"));
       });
     return () => { cancelled = true; };
   }, []);
@@ -104,13 +106,17 @@ function CoverConfigCard() {
   useEffect(() => {
     if (!service) return;
     let cancelled = false;
-    void fetchJson<{ apiKey?: string }>(`/cover/secret/${encodeURIComponent(service)}`)
+    void fetchJson<{ apiKeySet?: boolean }>(`/cover/secret/${encodeURIComponent(service)}`)
       .then((payload) => {
         if (cancelled) return;
-        setApiKey(payload.apiKey ?? "");
+        setApiKey("");
+        setApiKeySet(Boolean(payload.apiKeySet));
       })
       .catch(() => {
-        if (!cancelled) setApiKey("");
+        if (!cancelled) {
+          setApiKey("");
+          setApiKeySet(false);
+        }
       });
     return () => { cancelled = true; };
   }, [service]);
@@ -130,11 +136,14 @@ function CoverConfigCard() {
     setStatus("saving");
     setMessage("");
     try {
-      await fetchJson(`/cover/secret/${encodeURIComponent(provider.service)}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apiKey: apiKey.trim() }),
-      });
+      const trimmedKey = apiKey.trim();
+      if (trimmedKey || !apiKeySet) {
+        await fetchJson(`/cover/secret/${encodeURIComponent(provider.service)}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ apiKey: trimmedKey }),
+        });
+      }
       await fetchJson("/cover/config", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -145,10 +154,10 @@ function CoverConfigCard() {
         }),
       });
       setStatus("saved");
-      setMessage(tr("封面配置已保存", "Cover config saved"));
+      setMessage(tr("封面配置已保存", "Cover config saved", "Đã lưu cấu hình bìa"));
     } catch (error) {
       setStatus("error");
-      setMessage(error instanceof Error ? error.message : tr("保存封面配置失败", "Failed to save cover config"));
+      setMessage(error instanceof Error ? error.message : tr("保存封面配置失败", "Failed to save cover config", "Không lưu được cấu hình bìa"));
     }
   };
 
@@ -158,36 +167,37 @@ function CoverConfigCard() {
     <section className="rounded-xl border border-border/50 bg-card/50 p-4 space-y-3">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h2 className="text-sm font-medium text-foreground">{tr("封面生成", "Cover generation")}</h2>
+          <h2 className="text-sm font-medium text-foreground">{tr("封面生成", "Cover generation", "Tạo bìa")}</h2>
           <p className="mt-1 text-xs text-muted-foreground/70">
             {tr(
               "只配置封面通道和模型；封面尺寸由短篇封面提示词和内部默认处理。",
               "Only configures the cover provider and model; cover size is handled by the short-story cover prompt and internal defaults.",
+              "Chỉ cấu hình kênh và mô hình tạo bìa; kích thước bìa do prompt bìa truyện ngắn và mặc định nội bộ xử lý.",
             )}
           </p>
         </div>
         {selected?.connected && (
           <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-500">
-            {tr("已有密钥", "Key saved")}
+            {tr("已有密钥", "Key saved", "Đã có khóa")}
           </span>
         )}
       </div>
 
       <div className="grid gap-3 md:grid-cols-2">
         <label className="space-y-1.5">
-          <span className="block text-xs font-medium text-muted-foreground/70">{tr("服务", "Service")}</span>
+          <span className="block text-xs font-medium text-muted-foreground/70">{tr("服务", "Service", "Dịch vụ")}</span>
           <select
             value={service}
             onChange={(event) => handleServiceChange(event.target.value)}
             className="w-full rounded-lg border border-border/60 bg-background px-3 py-2 text-sm"
           >
             {providers.map((provider) => (
-              <option key={provider.service} value={provider.service}>{provider.label}</option>
+              <option key={provider.service} value={provider.service}>{localizeServiceLabel(provider.service, provider.label)}</option>
             ))}
           </select>
         </label>
         <label className="space-y-1.5">
-          <span className="block text-xs font-medium text-muted-foreground/70">{tr("封面模型", "Cover model")}</span>
+          <span className="block text-xs font-medium text-muted-foreground/70">{tr("封面模型", "Cover model", "Mô hình bìa")}</span>
           <select
             value={model}
             onChange={(event) => setModel(event.target.value)}
@@ -213,6 +223,7 @@ function CoverConfigCard() {
           {tr(
             "留空使用该服务的默认地址；自定义地址会作为封面生成 API 根路径。",
             "Leave blank to use the provider default; a custom value becomes the cover generation API root.",
+            "Để trống để dùng địa chỉ mặc định của dịch vụ; địa chỉ tùy chỉnh sẽ là đường dẫn gốc API tạo bìa.",
           )}
         </span>
       </label>
@@ -224,7 +235,7 @@ function CoverConfigCard() {
             type={showKey ? "text" : "password"}
             value={apiKey}
             onChange={(event) => setApiKey(event.target.value)}
-            placeholder="sk-..."
+            placeholder={apiKeySet ? "••••••••" : "sk-..."}
             className="w-full rounded-lg border border-border/60 bg-background px-3 py-2 pr-10 text-sm font-mono"
           />
           <button
@@ -235,6 +246,11 @@ function CoverConfigCard() {
             {showKey ? <EyeOff size={14} /> : <Eye size={14} />}
           </button>
         </div>
+        {apiKeySet && !apiKey && (
+          <span className="block text-[11px] leading-5 text-muted-foreground/55">
+            {tr("已保存密钥（不回显），留空保存则保留。", "A key is saved (not shown); saving with an empty field keeps it.", "Khóa đã được lưu (không hiển thị); lưu với ô trống sẽ giữ nguyên.")}
+          </span>
+        )}
       </label>
 
       <div className="flex flex-wrap items-center gap-3">
@@ -244,7 +260,7 @@ function CoverConfigCard() {
           className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3.5 py-2 text-xs text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
         >
           {status === "saving" && <Loader2 size={12} className="animate-spin" />}
-          {tr("保存封面配置", "Save cover config")}
+          {tr("保存封面配置", "Save cover config", "Lưu cấu hình bìa")}
         </button>
         {message && (
           <span className={`text-xs ${status === "error" ? "text-destructive" : "text-emerald-500"}`}>
@@ -338,13 +354,13 @@ export function ServiceListPage({ nav }: { nav: Nav }) {
           onClick={nav.toDashboard}
           className="inline-flex items-center rounded-lg border border-border/50 bg-card/60 px-3 py-1.5 font-medium text-foreground hover:bg-secondary/50 transition-colors"
         >
-          {tr("首页", "Home")}
+          {tr("首页", "Home", "Trang chủ")}
         </button>
         <span className="text-border">/</span>
-        <span className="text-foreground">{tr("服务商管理", "Providers")}</span>
+        <span className="text-foreground">{tr("服务商管理", "Providers", "Quản lý nhà cung cấp")}</span>
       </div>
 
-      <h1 className="font-serif text-2xl">{tr("服务商管理", "Providers")}</h1>
+      <h1 className="font-serif text-2xl">{tr("服务商管理", "Providers", "Quản lý nhà cung cấp")}</h1>
 
       <ServiceConfigSourceCard onChange={() => { void refreshServices(); }} />
 
@@ -356,14 +372,14 @@ export function ServiceListPage({ nav }: { nav: Nav }) {
           type="text"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder={tr("搜索服务商", "Search providers")}
+          placeholder={tr("搜索服务商", "Search providers", "Tìm nhà cung cấp")}
           className="w-full rounded-lg border border-border/60 bg-background py-2 pl-9 pr-9 text-sm outline-none focus:border-primary/50"
         />
         {query && (
           <button
             onClick={() => setQuery("")}
             className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground/50 hover:text-muted-foreground"
-            aria-label={tr("清空搜索", "Clear search")}
+            aria-label={tr("清空搜索", "Clear search", "Xóa tìm kiếm")}
           >
             <X size={14} />
           </button>
@@ -380,7 +396,7 @@ export function ServiceListPage({ nav }: { nav: Nav }) {
               : "border-border/60 text-muted-foreground hover:bg-secondary/50",
           ].join(" ")}
         >
-          {tr("全部", "All")} {bankServices.length}
+          {tr("全部", "All", "Tất cả")} {bankServices.length}
         </button>
         {GROUP_ORDER.map((group) => {
           const selected = selectedGroups.has(group);
@@ -405,7 +421,7 @@ export function ServiceListPage({ nav }: { nav: Nav }) {
             onClick={() => setSelectedGroups(new Set())}
             className="inline-flex items-center rounded-full px-3 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
           >
-            {tr("清除筛选", "Clear filters")}
+            {tr("清除筛选", "Clear filters", "Xóa bộ lọc")}
           </button>
         )}
       </div>
@@ -416,7 +432,7 @@ export function ServiceListPage({ nav }: { nav: Nav }) {
           checked={onlyConnected}
           onChange={(event) => setOnlyConnected(event.target.checked)}
         />
-        <span>{tr("只看已连接", "Connected only")} ({connectedCount})</span>
+        <span>{tr("只看已连接", "Connected only", "Chỉ xem đã kết nối")} ({connectedCount})</span>
       </label>
 
       <div className="h-px bg-border/30" />
@@ -458,7 +474,7 @@ export function ServiceListPage({ nav }: { nav: Nav }) {
       {showCustomSection && (
         <section className="space-y-3">
           <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground/70">
-            {tr("自定义服务", "Custom services")}
+            {tr("自定义服务", "Custom services", "Dịch vụ tùy chỉnh")}
           </h2>
           <div className="grid grid-cols-2 gap-3">
             {filteredCustom.map((svc) => (
@@ -474,7 +490,7 @@ export function ServiceListPage({ nav }: { nav: Nav }) {
                 className="flex min-h-[92px] flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed border-border/40 p-5 text-muted-foreground/60 transition-all hover:border-primary/30 hover:text-muted-foreground"
               >
                 <Plus size={18} />
-                <span className="text-xs">{tr("自定义服务", "Custom service")}</span>
+                <span className="text-xs">{tr("自定义服务", "Custom service", "Dịch vụ tùy chỉnh")}</span>
               </button>
             )}
           </div>
@@ -483,7 +499,7 @@ export function ServiceListPage({ nav }: { nav: Nav }) {
 
       {!loading && filtered.length === 0 && filteredCustom.length === 0 && !canCreateCustom && (
         <div className="rounded-lg border border-dashed border-border/40 p-8 text-center text-sm text-muted-foreground">
-          {tr("没有匹配的服务商", "No matching providers")}
+          {tr("没有匹配的服务商", "No matching providers", "Không có nhà cung cấp khớp")}
         </div>
       )}
     </div>

@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { LLMClient, OnStreamProgress } from "../llm/provider.js";
 import { chatCompletion, createLLMClient } from "../llm/provider.js";
+import { toEnCompatLanguage } from "../utils/language.js";
 import type { Logger } from "../utils/logger.js";
 import type { BookConfig, FanficMode, RevisionGate } from "../models/book.js";
 import type { ChapterMeta } from "../models/chapter.js";
@@ -231,15 +232,15 @@ export function buildImportFoundationSource(
   const anchorIndexes = pickImportAnchorIndexes(chapters.length, edgeChapterCount, middleAnchorCount);
   const header = language === "en"
     ? [
-        "## Import foundation source package",
-        "",
-        `The imported book has ${chapters.length} chapters. To avoid overflowing the LLM context, this package keeps the opening chapters, ending/continuation point, selected middle anchors, and a capped title catalog. Full chapters will still be replayed sequentially after foundation generation to rebuild truth files.`,
-      ].join("\n")
+      "## Import foundation source package",
+      "",
+      `The imported book has ${chapters.length} chapters. To avoid overflowing the LLM context, this package keeps the opening chapters, ending/continuation point, selected middle anchors, and a capped title catalog. Full chapters will still be replayed sequentially after foundation generation to rebuild truth files.`,
+    ].join("\n")
     : [
-        "## 导入基础设定压缩资料包",
-        "",
-        `本次导入共 ${chapters.length} 章。为避免超出 LLM 上下文，这里保留开篇、结尾续写点、少量中段锚点和标题目录；完整章节将在后续顺序回放中逐章分析并沉淀 truth files。`,
-      ].join("\n");
+      "## 导入基础设定压缩资料包",
+      "",
+      `本次导入共 ${chapters.length} 章。为避免超出 LLM 上下文，这里保留开篇、结尾续写点、少量中段锚点和标题目录；完整章节将在后续顺序回放中逐章分析并沉淀 truth files。`,
+    ].join("\n");
   const catalogTitle = language === "en" ? "## Capped chapter title catalog" : "## 章节标题目录（截断）";
   const anchorsTitle = language === "en" ? "## Source excerpts for architecture" : "## 用于反推基础设定的正文摘录";
   const anchorText = anchorIndexes
@@ -475,16 +476,18 @@ export class PipelineRunner {
   private async resolveBookLanguage(
     book: Pick<BookConfig, "genre" | "language">,
   ): Promise<LengthLanguage> {
-    if (book.language) {
-      return book.language;
-    }
-
-    try {
-      const { profile } = await this.loadGenreProfile(book.genre);
-      return profile.language;
-    } catch {
-      return "zh";
-    }
+    // Vietnamese is Latin-script: helpers/logs treat it as "en". (The writer
+    // and architect read book.language directly and apply their own vi
+    // override, so this collapse only affects generic pipeline helpers.)
+    const raw = book.language ?? await (async () => {
+      try {
+        const { profile } = await this.loadGenreProfile(book.genre);
+        return profile.language;
+      } catch {
+        return "zh";
+      }
+    })();
+    return raw === "en" || raw === "vi" ? "en" : "zh";
   }
 
   private async resolveBookLanguageById(bookId: string): Promise<LengthLanguage> {
@@ -617,19 +620,19 @@ export class PipelineRunner {
 
     return language === "en"
       ? [
-          "## Overall Feedback",
-          review.overallFeedback,
-          "",
-          "## Dimension Notes",
-          dimensionLines || "- none",
-        ].join("\n")
+        "## Overall Feedback",
+        review.overallFeedback,
+        "",
+        "## Dimension Notes",
+        dimensionLines || "- none",
+      ].join("\n")
       : [
-          "## 总评",
-          review.overallFeedback,
-          "",
-          "## 分项问题",
-          dimensionLines || "- 无",
-        ].join("\n");
+        "## 总评",
+        review.overallFeedback,
+        "",
+        "## 分项问题",
+        dimensionLines || "- 无",
+      ].join("\n");
   }
 
   private agentCtx(bookId?: string): AgentContext {
@@ -766,7 +769,7 @@ export class PipelineRunner {
         stagingBookDir,
         foundation,
         gp.numericalSystem,
-        book.language ?? gp.language,
+        toEnCompatLanguage(book.language ?? gp.language),
       );
 
       if (effectiveExternalContext && effectiveExternalContext.trim().length > 0) {
@@ -778,7 +781,7 @@ export class PipelineRunner {
       this.logStage(stageLanguage, { zh: "初始化控制文档", en: "initializing control documents" });
       await this.state.ensureControlDocumentsAt(
         stagingBookDir,
-        book.language ?? gp.language,
+        toEnCompatLanguage(book.language ?? gp.language),
         options.authorIntent ?? effectiveExternalContext,
       );
       if (options.currentFocus?.trim()) {
@@ -903,7 +906,7 @@ export class PipelineRunner {
       bookDir,
       foundation,
       gp.numericalSystem,
-      book.language ?? gp.language,
+      toEnCompatLanguage(book.language ?? gp.language),
       "revise",
     );
   }
@@ -1009,7 +1012,7 @@ export class PipelineRunner {
       bookDir,
       foundation,
       gp.numericalSystem,
-      book.language ?? gp.language,
+      toEnCompatLanguage(book.language ?? gp.language),
     );
     this.logStage(stageLanguage, { zh: "初始化控制文档", en: "initializing control documents" });
     await this.state.ensureControlDocuments(book.id, this.config.externalContext);
@@ -1061,7 +1064,7 @@ export class PipelineRunner {
     });
 
     this.logStage(stageLanguage, { zh: "写入基础设定文件", en: "writing foundation files" });
-    await architect.writeFoundationFiles(bookDir, foundation, gp.numericalSystem, book.language ?? gp.language);
+    await architect.writeFoundationFiles(bookDir, foundation, gp.numericalSystem, toEnCompatLanguage(book.language ?? gp.language));
 
     this.logStage(stageLanguage, { zh: "初始化控制文档", en: "initializing control documents" });
     await this.state.ensureControlDocuments(book.id, direction?.trim() || this.config.externalContext);
@@ -1168,7 +1171,7 @@ export class PipelineRunner {
       const filename = `${paddedNum}_${sanitized}.md`;
       const filePath = join(chaptersDir, filename);
 
-      const resolvedLang = book.language ?? gp.language;
+      const resolvedLang = toEnCompatLanguage(book.language ?? gp.language);
       const heading = resolvedLang === "en"
         ? `# Chapter ${chapterNumber}: ${draftOutput.title}`
         : `# 第${chapterNumber}章 ${draftOutput.title}`;
@@ -1310,11 +1313,11 @@ export class PipelineRunner {
     const updated = index.map((ch) =>
       ch.number === targetChapter
         ? {
-            ...ch,
-            status: (result.passed ? "ready-for-review" : "audit-failed") as ChapterMeta["status"],
-            updatedAt: new Date().toISOString(),
-            auditIssues: result.issues.map((i) => `[${i.severity}] ${i.description}`),
-          }
+          ...ch,
+          status: (result.passed ? "ready-for-review" : "audit-failed") as ChapterMeta["status"],
+          updatedAt: new Date().toISOString(),
+          auditIssues: result.issues.map((i) => `[${i.severity}] ${i.description}`),
+        }
         : ch,
     );
     await this.state.saveChapterIndex(bookId, updated);
@@ -1394,11 +1397,11 @@ export class PipelineRunner {
         language,
         auditOptions: reviseControlInput
           ? {
-              chapterIntent: reviseControlInput.plan.intentMarkdown,
-              chapterMemo: reviseControlInput.plan.memo,
-              contextPackage: reviseControlInput.composed.contextPackage,
-              ruleStack: reviseControlInput.composed.ruleStack,
-            }
+            chapterIntent: reviseControlInput.plan.intentMarkdown,
+            chapterMemo: reviseControlInput.plan.memo,
+            contextPackage: reviseControlInput.composed.contextPackage,
+            ruleStack: reviseControlInput.composed.ruleStack,
+          }
           : undefined,
       });
 
@@ -1443,13 +1446,13 @@ export class PipelineRunner {
         book.genre,
         reviseControlInput
           ? {
-              chapterIntent: reviseControlInput.plan.intentMarkdown,
-              chapterMemo: reviseControlInput.plan.memo,
-              chapterIntentData: reviseControlInput.plan.intent,
-              contextPackage: reviseControlInput.composed.contextPackage,
-              ruleStack: reviseControlInput.composed.ruleStack,
-              lengthSpec,
-            }
+            chapterIntent: reviseControlInput.plan.intentMarkdown,
+            chapterMemo: reviseControlInput.plan.memo,
+            chapterIntentData: reviseControlInput.plan.intent,
+            contextPackage: reviseControlInput.composed.contextPackage,
+            ruleStack: reviseControlInput.composed.ruleStack,
+            lengthSpec,
+          }
           : { lengthSpec },
       );
 
@@ -1471,25 +1474,25 @@ export class PipelineRunner {
         language,
         auditOptions: reviseControlInput
           ? {
-              temperature: 0,
-              chapterIntent: reviseControlInput.plan.intentMarkdown,
-              chapterMemo: reviseControlInput.plan.memo,
-              contextPackage: reviseControlInput.composed.contextPackage,
-              ruleStack: reviseControlInput.composed.ruleStack,
-              truthFileOverrides: {
-                currentState: reviseOutput.updatedState !== "(状态卡未更新)" ? reviseOutput.updatedState : undefined,
-                ledger: reviseOutput.updatedLedger !== "(账本未更新)" ? reviseOutput.updatedLedger : undefined,
-                hooks: reviseOutput.updatedHooks !== "(伏笔池未更新)" ? reviseOutput.updatedHooks : undefined,
-              },
-            }
-          : {
-              temperature: 0,
-              truthFileOverrides: {
-                currentState: reviseOutput.updatedState !== "(状态卡未更新)" ? reviseOutput.updatedState : undefined,
-                ledger: reviseOutput.updatedLedger !== "(账本未更新)" ? reviseOutput.updatedLedger : undefined,
-                hooks: reviseOutput.updatedHooks !== "(伏笔池未更新)" ? reviseOutput.updatedHooks : undefined,
-              },
+            temperature: 0,
+            chapterIntent: reviseControlInput.plan.intentMarkdown,
+            chapterMemo: reviseControlInput.plan.memo,
+            contextPackage: reviseControlInput.composed.contextPackage,
+            ruleStack: reviseControlInput.composed.ruleStack,
+            truthFileOverrides: {
+              currentState: reviseOutput.updatedState !== "(状态卡未更新)" ? reviseOutput.updatedState : undefined,
+              ledger: reviseOutput.updatedLedger !== "(账本未更新)" ? reviseOutput.updatedLedger : undefined,
+              hooks: reviseOutput.updatedHooks !== "(伏笔池未更新)" ? reviseOutput.updatedHooks : undefined,
             },
+          }
+          : {
+            temperature: 0,
+            truthFileOverrides: {
+              currentState: reviseOutput.updatedState !== "(状态卡未更新)" ? reviseOutput.updatedState : undefined,
+              ledger: reviseOutput.updatedLedger !== "(账本未更新)" ? reviseOutput.updatedLedger : undefined,
+              hooks: reviseOutput.updatedHooks !== "(伏笔池未更新)" ? reviseOutput.updatedHooks : undefined,
+            },
+          },
       });
       const effectivePostRevision = this.restoreActionableAuditIfLost(
         preRevision,
@@ -1605,14 +1608,14 @@ export class PipelineRunner {
       const updatedIndex = index.map((ch) => {
         if (ch.number === targetChapter) {
           return {
-              ...ch,
-              status: (effectivePostRevision.auditResult.passed ? "ready-for-review" : "audit-failed") as ChapterMeta["status"],
-              wordCount: normalizedRevision.wordCount,
-              updatedAt: new Date().toISOString(),
-              auditIssues: effectivePostRevision.auditResult.issues.map((i) => `[${i.severity}] ${i.description}`),
-              lengthWarnings,
-              lengthTelemetry,
-            };
+            ...ch,
+            status: (effectivePostRevision.auditResult.passed ? "ready-for-review" : "audit-failed") as ChapterMeta["status"],
+            wordCount: normalizedRevision.wordCount,
+            updatedAt: new Date().toISOString(),
+            auditIssues: effectivePostRevision.auditResult.issues.map((i) => `[${i.severity}] ${i.description}`),
+            lengthWarnings,
+            lengthTelemetry,
+          };
         }
         if (ch.number > targetChapter) {
           return {
@@ -1808,15 +1811,15 @@ export class PipelineRunner {
     );
     const reducedControlInput = writeInput.chapterIntent && writeInput.contextPackage && writeInput.ruleStack
       ? {
-          chapterIntent: writeInput.chapterIntent,
-          chapterMemo: writeInput.chapterMemo,
-          chapterIntentData: writeInput.chapterIntentData,
-          contextPackage: writeInput.contextPackage,
-          ruleStack: writeInput.ruleStack,
-        }
+        chapterIntent: writeInput.chapterIntent,
+        chapterMemo: writeInput.chapterMemo,
+        chapterIntentData: writeInput.chapterIntentData,
+        contextPackage: writeInput.contextPackage,
+        ruleStack: writeInput.ruleStack,
+      }
       : undefined;
     const { profile: gp } = await this.loadGenreProfile(book.genre);
-    const pipelineLang = book.language ?? gp.language;
+    const pipelineLang = toEnCompatLanguage(book.language ?? gp.language);
     const lengthSpec = buildLengthSpec(
       wordCount ?? book.chapterWordCount,
       pipelineLang,
@@ -2217,7 +2220,7 @@ export class PipelineRunner {
 
     this.logStage(stageLanguage, { zh: "修复章节状态结算", en: "repairing chapter state settlement" });
     const { profile: gp } = await this.loadGenreProfile(book.genre);
-    const pipelineLang = book.language ?? gp.language;
+    const pipelineLang = toEnCompatLanguage(book.language ?? gp.language);
     const content = await this.readChapterContent(bookDir, targetChapter);
     const storyDir = join(bookDir, "story");
     const [oldState, oldHooks] = await Promise.all([
@@ -2264,7 +2267,7 @@ export class PipelineRunner {
       if (recovery.kind !== "recovered") {
         throw new Error(
           recovery.issues[0]?.description
-            ?? `State repair still failed for chapter ${targetChapter}.`,
+          ?? `State repair still failed for chapter ${targetChapter}.`,
         );
       }
       repairedOutput = recovery.output;
@@ -2335,7 +2338,7 @@ export class PipelineRunner {
 
     this.logStage(stageLanguage, { zh: "根据已编辑正文同步真相文件与索引", en: "syncing truth files and indexes from edited chapter body" });
     const { profile: gp } = await this.loadGenreProfile(book.genre);
-    const pipelineLang = book.language ?? gp.language;
+    const pipelineLang = toEnCompatLanguage(book.language ?? gp.language);
     const content = await this.readChapterContent(bookDir, targetChapter);
     const storyDir = join(bookDir, "story");
     const [oldState, oldHooks] = await Promise.all([
@@ -2387,10 +2390,10 @@ export class PipelineRunner {
         content,
         reducedControlInput: reducedControlInput
           ? {
-              chapterIntent: reducedControlInput.plan.intentMarkdown,
-              contextPackage: reducedControlInput.composed.contextPackage,
-              ruleStack: reducedControlInput.composed.ruleStack,
-            }
+            chapterIntent: reducedControlInput.plan.intentMarkdown,
+            contextPackage: reducedControlInput.composed.contextPackage,
+            ruleStack: reducedControlInput.composed.ruleStack,
+          }
           : undefined,
         oldState,
         oldHooks,
@@ -2402,7 +2405,7 @@ export class PipelineRunner {
       if (recovery.kind !== "recovered") {
         throw new Error(
           recovery.issues[0]?.description
-            ?? `Chapter sync still failed for chapter ${targetChapter}.`,
+          ?? `Chapter sync still failed for chapter ${targetChapter}.`,
         );
       }
       syncedOutput = recovery.output;
@@ -2566,11 +2569,11 @@ Base the analysis on the text's actual features, not generalities. Support each 
         qualitativeGuide = response.content.trim()
           ? response.content
           : this.buildDeterministicStyleGuide(profile, {
-              language: lang,
-              reason: lang === "en"
-                ? "The LLM returned empty style analysis; using the statistical fingerprint fallback."
-                : "LLM 未返回有效文风分析，本次使用统计指纹兜底生成文风指南。",
-            });
+            language: lang,
+            reason: lang === "en"
+              ? "The LLM returned empty style analysis; using the statistical fingerprint fallback."
+              : "LLM 未返回有效文风分析，本次使用统计指纹兜底生成文风指南。",
+          });
       } catch (error) {
         qualitativeGuide = this.buildDeterministicStyleGuide(profile, {
           language: lang,
@@ -2829,7 +2832,7 @@ ${matrix}`,
       const book = await this.state.loadBookConfig(input.bookId);
       const bookDir = this.state.bookDir(input.bookId);
       const { profile: gp } = await this.loadGenreProfile(book.genre);
-      const resolvedLanguage = book.language ?? gp.language;
+      const resolvedLanguage = toEnCompatLanguage(book.language ?? gp.language);
 
       const startFrom = input.resumeFrom ?? 1;
 
@@ -2847,13 +2850,13 @@ ${matrix}`,
         const isSeries = input.importMode === "series";
         const foundation = isSeries
           ? await this.generateAndReviewFoundation({
-              generate: (reviewFeedback) => architect.generateFoundationFromImport(book, foundationSource, undefined, reviewFeedback, { importMode: "series" }),
-              reviewer: new FoundationReviewerAgent(this.agentCtxFor("foundation-reviewer", input.bookId)),
-              mode: "series",
-              language: resolvedLanguage === "en" ? "en" : "zh",
-              stageLanguage: resolvedLanguage,
-              targetChapters: book.targetChapters,
-            })
+            generate: (reviewFeedback) => architect.generateFoundationFromImport(book, foundationSource, undefined, reviewFeedback, { importMode: "series" }),
+            reviewer: new FoundationReviewerAgent(this.agentCtxFor("foundation-reviewer", input.bookId)),
+            mode: "series",
+            language: resolvedLanguage === "en" ? "en" : "zh",
+            stageLanguage: resolvedLanguage,
+            targetChapters: book.targetChapters,
+          })
           : await architect.generateFoundationFromImport(book, foundationSource);
         this.throwIfOperationAborted();
         await architect.writeFoundationFiles(
@@ -3659,13 +3662,14 @@ ${matrix}`,
       params.book.genre,
       params.auditOptions,
     );
-    const aiTells = analyzeAITells(params.chapterContent, params.language);
-    const sensitiveResult = analyzeSensitiveWords(params.chapterContent, undefined, params.language);
+    const compatLang = toEnCompatLanguage(params.language);
+    const aiTells = analyzeAITells(params.chapterContent, compatLang);
+    const sensitiveResult = analyzeSensitiveWords(params.chapterContent, undefined, compatLang);
     const longSpanFatigue = await analyzeLongSpanFatigue({
       bookDir: params.bookDir,
       chapterNumber: params.chapterNumber,
       chapterContent: params.chapterContent,
-      language: params.language,
+      language: compatLang,
     });
     const hasBlockedWords = sensitiveResult.found.some((f) => f.severity === "block");
     const issues: ReadonlyArray<AuditIssue> = [

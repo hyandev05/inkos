@@ -20,10 +20,20 @@ marked.use(markedTerminal({
 const BOLD_ON = "\x1b[1m";
 const BOLD_OFF = "\x1b[22m";
 
+/**
+ * 清除所有终端转义序列（模型回显的原文可能夹带 CSI / OSC / DCS 载荷）：
+ * - CSI:   ESC [ ... final byte（颜色、光标移动等）
+ * - OSC:   ESC ] ... BEL 或 ESC ] ... ST（剪贴板 OSC 52、超链接 OSC 8、标题等）
+ * - DCS/PM/APC: ESC P / X / ^ / _ ... ST
+ * - 裸 ESC + 单字节（如 ESC M 逆换行）也一并清掉
+ * 只清到分界符为止，不做任何载荷解释，保证模型内容无法向终端注入按键/剪贴板载荷。
+ */
+// eslint-disable-next-line no-control-regex
+const ANSI_ESCAPE_STRIP = /\x1b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[PX^_][^\x1b]*(?:\x1b\\|$)|.)/g;
+
 /** Strip ALL ANSI escape sequences from a string. */
 function stripAnsi(text: string): string {
-  // eslint-disable-next-line no-control-regex
-  return text.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
+  return text.replace(ANSI_ESCAPE_STRIP, "");
 }
 
 /**
@@ -34,7 +44,7 @@ function stripAnsi(text: string): string {
  */
 function postProcess(text: string): string {
   return text
-    .replace(/\x1b\[0m/g, "")
+    .replace(ANSI_ESCAPE_STRIP, "")
     .replace(/^(\s*)\* /gm, "$1· ")
     .replace(/\*\*(.+?)\*\*/g, `${BOLD_ON}$1${BOLD_OFF}`);
 }

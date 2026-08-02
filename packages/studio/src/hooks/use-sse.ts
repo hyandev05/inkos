@@ -1,4 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from "react";
+import { withStudioToken } from "../lib/studio-auth";
 
 export interface SSEMessage {
   readonly event: string;
@@ -90,7 +91,7 @@ export function useSSE(url = "/api/v1/events") {
   const seqRef = useRef(0);
 
   useEffect(() => {
-    const es = new EventSource(url);
+    const es = new EventSource(withStudioToken(url));
     esRef.current = es;
 
     es.onopen = () => setConnected(true);

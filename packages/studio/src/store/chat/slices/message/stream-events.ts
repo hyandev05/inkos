@@ -528,6 +528,7 @@ export function attachSessionStreamListeners({
             else execution.result = summarizeResult(data.result);
             const details = data.details ?? extractToolDetails(data.result);
             if (details !== undefined) execution.details = details;
+            if (typeof data.confirmToken === "string") execution.confirmToken = data.confirmToken;
             return execution;
           });
           return messages ? { messages } : {};

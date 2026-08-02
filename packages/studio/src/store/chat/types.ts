@@ -35,6 +35,8 @@ export interface ToolExecution {
   // 后台生产任务的工具卡（来自带 background 标记的 tool:start 或任务快照恢复）。
   // 无 executionId 事件的回退路由据此跳过任务卡，只挂聊天轮工具卡。
   background?: boolean;
+  // 服务器为该 propose_action 提案签发的单次确认令牌；确认时需原样带回。
+  confirmToken?: string;
 }
 
 // -- Message parts (chronologically ordered for rendering) --
@@ -140,6 +142,8 @@ export interface SendMessageOptions {
   readonly disabledSkills?: ReadonlyArray<string>;
   readonly attachments?: ReadonlyArray<ChatAttachmentPayload>;
   readonly playMode?: PlayMode;
+  // 服务器为该提案签发的单次确认令牌（确认式生产动作必填）。
+  readonly confirmToken?: string;
 }
 
 // 一次失败的聊天轮发送的原样参数（sendMessage 的 text 与 options），

@@ -10,6 +10,7 @@ import type {
   SessionSummary,
 } from "../../types";
 import { fetchJson } from "../../../../hooks/use-api";
+import { withStudioToken } from "../../../../lib/studio-auth";
 import { tr } from "../../../../lib/app-language";
 import { isConfirmedProductionSend } from "../../message-policy";
 import { attachSessionStreamListeners } from "./stream-events";
@@ -440,7 +441,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
       if (taskRunning && task) {
         const current = get().sessions[detailSessionId];
         current?.stream?.close();
-        const streamEs = new EventSource(`/api/v1/events?sessionId=${encodeURIComponent(detailSessionId)}`);
+        const streamEs = new EventSource(withStudioToken(`/api/v1/events?sessionId=${encodeURIComponent(detailSessionId)}`));
         set((state) => ({
           sessions: updateSession(state.sessions, detailSessionId, () => ({ stream: streamEs, isStreaming: true })),
         }));
@@ -545,7 +546,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
     // 运行中的任务卡不受影响——新连接建立时服务端会重放 running 快照，
     // 任务日志（log）与收尾（tool:end）都按 execution id 匹配，与 streamTs 无关。
     session.stream?.close();
-    const streamEs = new EventSource(`/api/v1/events?sessionId=${encodeURIComponent(sessionId)}`);
+    const streamEs = new EventSource(withStudioToken(`/api/v1/events?sessionId=${encodeURIComponent(sessionId)}`));
     set((state) => ({
       sessions: updateSession(state.sessions, sessionId, () => ({ stream: streamEs })),
     }));
@@ -566,6 +567,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
           requestedSkills,
           disabledSkills,
           attachments,
+          confirmToken: options?.confirmToken,
           sessionId,
           model: get().selectedModel ?? undefined,
           service: get().selectedService ?? undefined,

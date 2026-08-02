@@ -1,19 +1,21 @@
 import type { LengthCountingMode, LengthNormalizeMode, LengthSpec } from "../models/length-governance.js";
 
-export type LengthLanguage = "zh" | "en";
+export type LengthLanguage = "zh" | "en" | "vi";
 
 const REFERENCE_TARGET = 2200;
 const SOFT_RANGE_DELTA = 300;
 const HARD_RANGE_DELTA = 600;
 
 // Per-chapter length default in the book's native unit: Chinese counts characters (3000字),
-// English counts words (~2000 ≈ a 3000-char chapter). One cross-language number would mis-scale —
-// 3000 read as English words runs ~50% long, and the hard-range guard then force-expands correct chapters.
+// English and Vietnamese count words (~2000 ≈ a 3000-char chapter) because both are
+// Latin-script. One cross-language number would mis-scale — 3000 read as English/Vietnamese
+// words runs ~50% long, and the hard-range guard then force-expands correct chapters.
 export const DEFAULT_CHAPTER_LENGTH_ZH = 3000;
 export const DEFAULT_CHAPTER_LENGTH_EN = 2000;
+export const DEFAULT_CHAPTER_LENGTH_VI = 2000;
 
 export function defaultChapterLength(language: LengthLanguage = "zh"): number {
-  return language === "en" ? DEFAULT_CHAPTER_LENGTH_EN : DEFAULT_CHAPTER_LENGTH_ZH;
+  return language === "en" || language === "vi" ? DEFAULT_CHAPTER_LENGTH_EN : DEFAULT_CHAPTER_LENGTH_ZH;
 }
 
 export function countChapterLength(
@@ -33,7 +35,7 @@ export function countChapterLength(
 export function resolveLengthCountingMode(
   language: LengthLanguage = "zh",
 ): LengthCountingMode {
-  return language === "en" ? "en_words" : "zh_chars";
+  return language === "en" || language === "vi" ? "en_words" : "zh_chars";
 }
 
 export function formatLengthCount(

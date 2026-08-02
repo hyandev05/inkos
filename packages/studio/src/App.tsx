@@ -30,9 +30,12 @@ import { useSessionEvents } from "./hooks/use-session-events";
 import { useTheme } from "./hooks/use-theme";
 import { useI18n } from "./hooks/use-i18n";
 import { setAppLanguage, tr } from "./lib/app-language";
+import { captureStudioToken } from "./lib/studio-auth";
 import { postApi, putApi, useApi } from "./hooks/use-api";
 import { Sun, Moon } from "lucide-react";
 import { House } from "lucide-react";
+
+captureStudioToken();
 
 export type { HashRoute as Route } from "./hooks/use-hash-route";
 
@@ -213,6 +216,15 @@ export function App() {
                 className={`px-2.5 py-1 text-[16px] font-medium rounded-md ${currentLang === "en" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}
               >
                 EN
+              </button>
+              <button
+                onClick={async () => {
+                  await putApi("/project", { language: "vi" });
+                  refetchProject();
+                }}
+                className={`px-2.5 py-1 text-[16px] font-medium rounded-md ${currentLang === "vi" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}
+              >
+                VI
               </button>
             </div>
 

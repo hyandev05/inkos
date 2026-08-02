@@ -1,5 +1,4 @@
 import { Hono } from "hono";
-import { cors } from "hono/cors";
 import { streamSSE } from "hono/streaming";
 import { serve } from "@hono/node-server";
 import { gzipSync } from "node:zlib";
@@ -141,10 +140,25 @@ import {
 
 // -- Studio server language (read per request from the project config's `language`) --
 
-type StudioLanguage = "zh" | "en";
+type StudioLanguage = "zh" | "en" | "vi";
+
+// Session ids are only ever created as "<epoch>-<random>" (see POST /sessions);
+// anything else in a session-id position is a traversal attempt.
+const SAFE_SESSION_ID_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+
+function assertSafeSessionId(sessionId: string): void {
+  if (!SAFE_SESSION_ID_RE.test(sessionId)) {
+    throw new ApiError(400, "INVALID_SESSION_ID", "Invalid session id.");
+  }
+}
 
 function normalizeStudioLanguage(value: unknown): StudioLanguage {
-  return value === "en" ? "en" : "zh";
+  return value === "en" ? "en" : value === "vi" ? "vi" : "zh";
+}
+
+// Writing-language-sensitive agents support zh/en/vi; the UI locale maps 1:1.
+function toWritingLanguage(lang: StudioLanguage): "zh" | "en" | "vi" {
+  return lang;
 }
 
 function pick(lang: StudioLanguage, zh: string, en: string): string {
@@ -1102,15 +1116,15 @@ async function syncExternalChapterEdit(params: {
   const index = [...(await params.state.loadChapterIndex(params.bookId))];
   const updated = index.map((chapter) => chapter.number === params.chapterNumber
     ? {
-        ...chapter,
-        status: "audit-failed" as const,
-        wordCount: countContentUnits(params.content),
-        updatedAt: now,
-        auditIssues: [
-          ...chapter.auditIssues.filter((issue) => issue !== CHAT_EDIT_WARNING),
-          CHAT_EDIT_WARNING,
-        ],
-      }
+      ...chapter,
+      status: "audit-failed" as const,
+      wordCount: countContentUnits(params.content),
+      updatedAt: now,
+      auditIssues: [
+        ...chapter.auditIssues.filter((issue) => issue !== CHAT_EDIT_WARNING),
+        CHAT_EDIT_WARNING,
+      ],
+    }
     : chapter);
   if (updated.length > 0) {
     await params.state.saveChapterIndex(params.bookId, updated);
@@ -1407,16 +1421,16 @@ function isConfirmedProductionAction(args: {
   return (args.actionSource === "button" || args.actionSource === "slash")
     && (
       args.requestedIntent === "create_book"
-    || args.requestedIntent === "short_run"
-    || args.requestedIntent === "script_create"
-    || args.requestedIntent === "storyboard_create"
-    || args.requestedIntent === "interactive_film_create"
-    || args.requestedIntent === "translation_create"
-    || args.requestedIntent === "play_start"
-    || args.requestedIntent === "generate_cover"
-    || args.requestedIntent === "draft_structure"
-    || args.requestedIntent === "connect_choice"
-    || args.requestedIntent === "remove_node"
+      || args.requestedIntent === "short_run"
+      || args.requestedIntent === "script_create"
+      || args.requestedIntent === "storyboard_create"
+      || args.requestedIntent === "interactive_film_create"
+      || args.requestedIntent === "translation_create"
+      || args.requestedIntent === "play_start"
+      || args.requestedIntent === "generate_cover"
+      || args.requestedIntent === "draft_structure"
+      || args.requestedIntent === "connect_choice"
+      || args.requestedIntent === "remove_node"
     );
 }
 
@@ -1464,15 +1478,15 @@ function buildWriteNextResponseText(
 ): string {
   const zhResponseText = writeNeedsReview
     ? [
-        `已为 ${bookId} 写出第 ${writeResult.chapterNumber} 章`,
-        writeResult.title ? `《${writeResult.title}》` : "",
-        `，字数 ${writeResult.wordCount}，但审稿未通过，状态 ${writeResult.status}，需要复核后再继续。`,
-      ].join("")
+      `已为 ${bookId} 写出第 ${writeResult.chapterNumber} 章`,
+      writeResult.title ? `《${writeResult.title}》` : "",
+      `，字数 ${writeResult.wordCount}，但审稿未通过，状态 ${writeResult.status}，需要复核后再继续。`,
+    ].join("")
     : [
-        `已为 ${bookId} 完成第 ${writeResult.chapterNumber} 章`,
-        writeResult.title ? `《${writeResult.title}》` : "",
-        `，字数 ${writeResult.wordCount}，状态 ${writeResult.status}。`,
-      ].join("");
+      `已为 ${bookId} 完成第 ${writeResult.chapterNumber} 章`,
+      writeResult.title ? `《${writeResult.title}》` : "",
+      `，字数 ${writeResult.wordCount}，状态 ${writeResult.status}。`,
+    ].join("");
   const enChapterRef = writeResult.title
     ? `chapter ${writeResult.chapterNumber} "${writeResult.title}"`
     : `chapter ${writeResult.chapterNumber}`;
@@ -1533,15 +1547,15 @@ function createWriteNextChapterTool(
         const stoppedStatus = last?.status !== "ready-for-review" ? last?.status : undefined;
         const responseText = stoppedStatus
           ? pick(
-              lang,
-              `已完成 ${results.length}/${chapterCount} 章；第 ${last?.chapterNumber} 章状态为 ${stoppedStatus}，批量写作已停止，请复核后再继续。`,
-              `Completed ${results.length}/${chapterCount} chapters. Chapter ${last?.chapterNumber} ended with ${stoppedStatus}, so the batch stopped for review.`,
-            )
+            lang,
+            `已完成 ${results.length}/${chapterCount} 章；第 ${last?.chapterNumber} 章状态为 ${stoppedStatus}，批量写作已停止，请复核后再继续。`,
+            `Completed ${results.length}/${chapterCount} chapters. Chapter ${last?.chapterNumber} ended with ${stoppedStatus}, so the batch stopped for review.`,
+          )
           : pick(
-              lang,
-              `已连续完成 ${results.length} 章（第 ${results[0]?.chapterNumber} 章至第 ${last?.chapterNumber} 章）。`,
-              `Completed ${results.length} consecutive chapters (chapters ${results[0]?.chapterNumber}-${last?.chapterNumber}).`,
-            );
+            lang,
+            `已连续完成 ${results.length} 章（第 ${results[0]?.chapterNumber} 章至第 ${last?.chapterNumber} 章）。`,
+            `Completed ${results.length} consecutive chapters (chapters ${results[0]?.chapterNumber}-${last?.chapterNumber}).`,
+          );
         return {
           ...(stoppedStatus ? { isError: true } : {}),
           content: [{ type: "text", text: responseText }],
@@ -1636,7 +1650,7 @@ async function executeConfirmedProductionAction(args: {
     const payload = actionPayload?.shortRun;
     const direction = payload?.direction?.trim() || args.instruction.trim();
     if (!direction) throw new ApiError(400, "CONFIRMED_ACTION_PAYLOAD_INCOMPLETE", pick(lang, "确认短篇缺少方向，请重新生成确认卡。", "The short fiction confirmation is missing a direction. Regenerate the confirmation card."));
-    tool = createShortFictionRunTool(args.pipeline, args.root, { actionPayload, language: lang });
+    tool = createShortFictionRunTool(args.pipeline, args.root, { actionPayload, language: toWritingLanguage(lang) });
     params = {
       direction,
       ...(payload?.reference ? { reference: payload.reference } : {}),
@@ -1667,7 +1681,7 @@ async function executeConfirmedProductionAction(args: {
   } else if (args.requestedIntent === "script_create") {
     const payload = actionPayload?.scriptCreate;
     const title = requirePayloadText(payload?.title, pick(lang, "确认创建剧本缺少标题，请重新生成确认卡。", "The script creation confirmation is missing a title. Regenerate the confirmation card."));
-    tool = createScriptCreationTool(args.pipeline, args.root, { actionPayload, language: lang });
+    tool = createScriptCreationTool(args.pipeline, args.root, { actionPayload, language: toWritingLanguage(lang) });
     params = {
       title,
       instruction: args.instruction,
@@ -1684,7 +1698,7 @@ async function executeConfirmedProductionAction(args: {
   } else if (args.requestedIntent === "storyboard_create") {
     const payload = actionPayload?.storyboardCreate;
     const title = requirePayloadText(payload?.title, pick(lang, "确认创建分镜缺少标题，请重新生成确认卡。", "The storyboard creation confirmation is missing a title. Regenerate the confirmation card."));
-    tool = createStoryboardCreationTool(args.pipeline, args.root, { actionPayload, language: lang });
+    tool = createStoryboardCreationTool(args.pipeline, args.root, { actionPayload, language: toWritingLanguage(lang) });
     params = {
       title,
       instruction: args.instruction,
@@ -1702,7 +1716,7 @@ async function executeConfirmedProductionAction(args: {
   } else if (args.requestedIntent === "interactive_film_create") {
     const payload = actionPayload?.interactiveFilmCreate;
     const title = requirePayloadText(payload?.title, pick(lang, "确认创建互动影游缺少标题，请重新生成确认卡。", "The interactive film confirmation is missing a title. Regenerate the confirmation card."));
-    tool = createInteractiveFilmCreationTool(args.pipeline, args.root, { actionPayload, language: lang });
+    tool = createInteractiveFilmCreationTool(args.pipeline, args.root, { actionPayload, language: toWritingLanguage(lang) });
     params = {
       title,
       instruction: args.instruction,
@@ -1764,7 +1778,7 @@ async function executeConfirmedProductionAction(args: {
     if (!projectId) throw new ApiError(400, "INVALID_ID", "interactive-film action requires a project id (bookId)");
     const agentCtx = args.pipeline.createAgentContext("film-authoring", projectId);
     const deps = filmLLMDepsFromClient(agentCtx.client, agentCtx.model);
-    tool = createDraftStructureTool(args.root, projectId, deps, lang);
+    tool = createDraftStructureTool(args.root, projectId, deps, toWritingLanguage(lang));
     params = {
       instruction: payload?.instruction?.trim() || args.instruction,
     };
@@ -1878,7 +1892,14 @@ interface StudioBookListSummary {
 // --- Event bus for SSE ---
 
 type EventHandler = (event: string, data: unknown) => void;
-const subscribers = new Set<EventHandler>();
+// 订阅者带 sessionId 时只收自己会话的事件；不带 sessionId（全局订阅，如
+// Dashboard）只收书/守护进程级别的全局事件。会话内容（draft:delta 全文、
+// agent 指令、工具结果）不会广播给其它会话或匿名全局订阅者。
+interface Subscriber {
+  readonly handler: EventHandler;
+  readonly sessionId: string | null;
+}
+const subscribers = new Set<Subscriber>();
 const bookCreateStatus = new Map<string, { status: "creating" | "error"; error?: string }>();
 
 // 内存缓存：service -> 模型列表 + 更新时间戳；避免每次 sidebar 挂载时都打真实 LLM /models
@@ -1927,8 +1948,13 @@ interface ServiceProbeResult {
 }
 
 function broadcast(event: string, data: unknown): void {
-  for (const handler of subscribers) {
-    handler(event, data);
+  const record = data && typeof data === "object" ? data as { sessionId?: unknown } : null;
+  const dataSessionId = typeof record?.sessionId === "string" ? record.sessionId : undefined;
+  for (const subscriber of subscribers) {
+    if (dataSessionId !== undefined && subscriber.sessionId !== dataSessionId) {
+      continue;
+    }
+    subscriber.handler(event, data);
   }
 }
 
@@ -2777,6 +2803,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   const state = new StateManager(root);
   let cachedConfig = initialConfig;
   const activeConfirmedTasks = new Map<string, AbortController>();
+  // 任务对应的书（taskId → bookId）：删除书时用来定位并中止该书在写的任务。
+  // 建书任务（create_book）此时 bookId 未定，值为 null，与删除已有书不冲突。
+  const confirmedTaskBookIds = new Map<string, string | null>();
+  // 任务退场信号（taskId → resolve）：DELETE book 先 abort 再等任务真正退出，
+  // 否则 runner 的递归 mkdir 会在删除后把书目录"复活"。
+  const confirmedTaskSettles = new Map<string, () => void>();
   // 确认式生产任务的单任务名额（sessionId → taskId）。原来的检查是"await 读快照
   // → 之后才 set controller"的 check-then-act：两个并发确认请求都能通过检查，
   // 双任务同时启动、快照互相覆盖。这里在任何 await 之前同步占位，占位失败的
@@ -2788,6 +2820,24 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   // 已删除会话的 sessionId：删除会话时中止其生产任务，任务随后的错误持久化
   // 不能把快照文件重新写回来（给已删除的会话"还魂"）。同名会话重新创建时移除标记。
   const deletedSessionIds = new Set<string>();
+  // 服务器签发的"提案确认令牌"（sessionId → 令牌）：只有当一次真实 agent 运行
+  // 产出过 propose_action 提案时才会签发，确认式生产动作（actionSource=button/
+  // slash + requestedIntent）必须原样带回令牌才能执行。每次新提案覆盖旧令牌，
+  // 令牌一次性使用、10 分钟内有效——防止纯参数伪造的确认请求绕过确认门槛。
+  const pendingConfirmTokens = new Map<string, { intent: string; token: string; expiresAt: number }>();
+  const CONFIRM_TOKEN_TTL_MS = 10 * 60 * 1000;
+  const issueConfirmToken = (sessionId: string, intent: string): string => {
+    const token = randomUUID().replace(/-/g, "");
+    pendingConfirmTokens.set(sessionId, { intent, token, expiresAt: Date.now() + CONFIRM_TOKEN_TTL_MS });
+    return token;
+  };
+  const consumeConfirmToken = (sessionId: string, intent: string | undefined, token: string | undefined): boolean => {
+    const pending = pendingConfirmTokens.get(sessionId);
+    if (!pending || !token || pending.token !== token || pending.expiresAt < Date.now()) return false;
+    if (intent !== undefined && pending.intent !== intent) return false;
+    pendingConfirmTokens.delete(sessionId);
+    return true;
+  };
 
   // 已删除会话不再追加 transcript 消息：appendManualSessionMessages 底层的
   // appendTranscriptEvents 是 mkdir + appendFile，会把已删除会话的 sessions
@@ -2873,7 +2923,57 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     return task ? activeConfirmedTasks.get(task.execution.id) : undefined;
   };
 
-  app.use("/*", cors());
+  // Bearer-token auth — opt-in via INKOS_STUDIO_TOKEN. 设了环境变量才启用：
+  // 所有 /api/v1/* 请求都必须带 Authorization: Bearer <token>（SSE 用
+  // ?token= 查询参数，EventSource 无法设 header）。CLI 启动 Studio 时自动
+  // 生成令牌并把它带进浏览器 URL。未设环境变量时行为与之前一致（仅回环监听）。
+  const studioAuthToken = process.env.INKOS_STUDIO_TOKEN?.trim() ?? "";
+  const studioAuthEnabled = studioAuthToken.length > 0;
+  app.use("/api/v1/*", async (c, next) => {
+    if (studioAuthEnabled) {
+      const bearer = c.req.header("Authorization") ?? "";
+      const supplied = bearer.startsWith("Bearer ")
+        ? bearer.slice("Bearer ".length).trim()
+        : (c.req.query("token") ?? "");
+      if (supplied !== studioAuthToken) {
+        return c.json(
+          { error: { code: "UNAUTHORIZED", message: "A valid studio token is required." } },
+          401,
+        );
+      }
+    }
+    await next();
+  });
+
+  // Same-origin enforcement — replaces the old permissive `cors()`.
+  // Browsers must not be able to drive this API from other origins (drive-by
+  // pages, DNS-rebinding hosts). Requests without an Origin header (curl, local
+  // processes, same-origin GET/SSE, dev-server proxy rewrites) pass through.
+  app.use("/api/v1/*", async (c, next) => {
+    const origin = c.req.header("Origin");
+    if (origin && origin !== "null") {
+      let originHost: string;
+      let originHostname: string;
+      try {
+        const originUrl = new URL(origin);
+        originHost = originUrl.host;
+        originHostname = originUrl.hostname.toLowerCase();
+      } catch {
+        return c.json(
+          { error: { code: "CROSS_ORIGIN_FORBIDDEN", message: "Cross-origin requests are not allowed." } },
+          403,
+        );
+      }
+      const isLoopback = originHostname === "localhost" || originHostname === "127.0.0.1" || originHostname === "::1";
+      if (!isLoopback && originHost !== (c.req.header("Host") ?? "")) {
+        return c.json(
+          { error: { code: "CROSS_ORIGIN_FORBIDDEN", message: "Cross-origin requests are not allowed." } },
+          403,
+        );
+      }
+    }
+    await next();
+  });
 
   // Structured error handler — ApiError returns typed JSON, others return 500
   app.onError((error, c) => {
@@ -2962,16 +3062,16 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       : {};
     const scopedSseSink: LogSink = overrides?.sessionIdForSSE
       ? {
-          write(entry) {
-            broadcast("log", {
-              sessionId: overrides.sessionIdForSSE,
-              ...sseExecutionTag,
-              level: entry.level,
-              tag: entry.tag,
-              message: entry.message,
-            });
-          },
-        }
+        write(entry) {
+          broadcast("log", {
+            sessionId: overrides.sessionIdForSSE,
+            ...sseExecutionTag,
+            level: entry.level,
+            tag: entry.tag,
+            message: entry.message,
+          });
+        },
+      }
       : sseSink;
     const logger = createLogger({ tag: "studio", sinks: [scopedSseSink, consoleSink] });
     return {
@@ -3232,17 +3332,17 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
             role: "system",
             content: language === "en"
               ? [
-                  "You are a fiction editor generating one optional inspiration card for a chapter rewrite.",
-                  "Offer a concrete alternative beat, evidence/action detail, and ending turn that fit the supplied canon.",
-                  "Do not rewrite the chapter, modify canon, or claim any file was changed.",
-                  "Return only a short, readable Markdown card.",
-                ].join("\n")
+                "You are a fiction editor generating one optional inspiration card for a chapter rewrite.",
+                "Offer a concrete alternative beat, evidence/action detail, and ending turn that fit the supplied canon.",
+                "Do not rewrite the chapter, modify canon, or claim any file was changed.",
+                "Return only a short, readable Markdown card.",
+              ].join("\n")
               : [
-                  "你是小说编辑，只为本章重写生成一张可选的灵感卡。",
-                  "给出一个符合现有设定的具体替代场面、证据或行动细节，以及章尾转折。",
-                  "不要代写整章，不要改写既成事实，也不要声称已经修改文件。",
-                  "只返回简短、可读的 Markdown 灵感卡。",
-                ].join("\n"),
+                "你是小说编辑，只为本章重写生成一张可选的灵感卡。",
+                "给出一个符合现有设定的具体替代场面、证据或行动细节，以及章尾转折。",
+                "不要代写整章，不要改写既成事实，也不要声称已经修改文件。",
+                "只返回简短、可读的 Markdown 灵感卡。",
+              ].join("\n"),
           },
           {
             role: "user",
@@ -3669,13 +3769,18 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   // --- SSE ---
 
   app.get("/api/v1/events", (c) => {
+    const sessionId = c.req.query("sessionId");
+    if (sessionId && !SAFE_SESSION_ID_RE.test(sessionId)) {
+      return c.json({ error: "Invalid session id" }, 400);
+    }
     return streamSSE(c, async (stream) => {
       const handler: EventHandler = (event, data) => {
         stream.writeSSE({ event, data: JSON.stringify(data) });
       };
-      subscribers.add(handler);
+      const subscriber: Subscriber = { handler, sessionId: sessionId ?? null };
+      subscribers.add(subscriber);
+
       await stream.writeSSE({ event: "ping", data: "" });
-      const sessionId = c.req.query("sessionId");
       if (sessionId) {
         const task = await loadReconciledTaskSnapshot(sessionId);
         if (task) await stream.writeSSE({ event: "task:snapshot", data: JSON.stringify(task) });
@@ -3687,12 +3792,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       }, 30000);
 
       stream.onAbort(() => {
-        subscribers.delete(handler);
+        subscribers.delete(subscriber);
         clearInterval(keepAlive);
       });
 
       // Block until aborted
-      await new Promise(() => {});
+      await new Promise(() => { });
     });
   });
 
@@ -3788,10 +3893,10 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
     const entry: ServiceConfigEntry = service === "custom"
       ? {
-          service: "custom",
-          name: "Env LLM",
-          ...(env.values.baseUrl ? { baseUrl: env.values.baseUrl } : {}),
-        }
+        service: "custom",
+        name: "Env LLM",
+        ...(env.values.baseUrl ? { baseUrl: env.values.baseUrl } : {}),
+      }
       : { service };
     const serviceKey = serviceConfigKey(entry);
 
@@ -3917,7 +4022,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       return c.json({ error: "Unsupported cover service" }, 400);
     }
     const secrets = await loadSecrets(root);
-    return c.json({ apiKey: secrets.services[coverSecretKey(service)]?.apiKey ?? "" });
+    // Never return the stored key over HTTP — only whether one is set.
+    return c.json({ apiKeySet: Boolean(secrets.services[coverSecretKey(service)]?.apiKey) });
   });
 
   app.put("/api/v1/cover/secret/:service", async (c) => {
@@ -3989,12 +4095,17 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       }, 400);
     }
 
+    // Empty apiKey in the request means "use the stored key" — the key itself
+    // is never exposed to the frontend.
+    const storedKey = (await loadSecrets(root)).services[service]?.apiKey ?? "";
+    const effectiveApiKey = apiKey?.trim() || storedKey;
+
     const baseService = isCustomServiceId(service) ? "custom" : service;
     const apiKeyOptional = isApiKeyOptionalForEndpoint({
       provider: resolveServiceProviderFamily(baseService) ?? "openai",
       baseUrl: resolvedBaseUrl,
     });
-    if (!apiKey?.trim() && !apiKeyOptional) {
+    if (!effectiveApiKey && !apiKeyOptional) {
       return c.json({
         ok: false,
         error: pick(language, "API Key 不能为空", "API Key must not be empty"),
@@ -4006,7 +4117,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const probe = await probeServiceCapabilities({
       root,
       service,
-      apiKey: apiKey?.trim() ?? "",
+      apiKey: effectiveApiKey,
       baseUrl: resolvedBaseUrl,
       preferredApiFormat: apiFormat,
       preferredStream: stream,
@@ -4075,9 +4186,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   app.get("/api/v1/services/:service/secret", async (c) => {
     const service = c.req.param("service");
     const secrets = await loadSecrets(root);
-    return c.json({
-      apiKey: secrets.services[service]?.apiKey ?? "",
-    });
+    // Never return the stored key over HTTP — only whether one is set.
+    return c.json({ apiKeySet: Boolean(secrets.services[service]?.apiKey) });
   });
 
   app.get("/api/v1/services/models", async (c) => {
@@ -4330,7 +4440,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       if (updates.stream !== undefined) {
         existing.llm.stream = updates.stream;
       }
-      if (updates.language === "zh" || updates.language === "en") {
+      if (updates.language === "zh" || updates.language === "en" || updates.language === "vi") {
         existing.language = updates.language;
       }
       const { writeFile: writeFileFs } = await import("node:fs/promises");
@@ -4455,6 +4565,19 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   // --- Daemon control ---
 
   let schedulerInstance: Scheduler | null = null;
+  // start 的守护：guard 检查是同步的，但构造 Scheduler 前有多个 await
+  //（loadCurrentProjectConfig / buildPipelineConfig）。两个并发 start 都能通过
+  // guard 的话会创建两个 Scheduler、互相覆盖 schedulerInstance，stop 只能停掉
+  // 后一个，前一个永远停不下来。这里在任何 await 之前同步占位，占位失败的
+  // 请求直接 409；stop 等待正在进行的 start 结束后再判断。
+  let daemonStartInFlight: Promise<void> | null = null;
+  let daemonStartResolve: (() => void) | null = null;
+
+  function settleDaemonStart(): void {
+    daemonStartResolve?.();
+    daemonStartResolve = null;
+    daemonStartInFlight = null;
+  }
 
   app.get("/api/v1/daemon", (c) => {
     return c.json({
@@ -4466,6 +4589,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     if (schedulerInstance?.isRunning) {
       return c.json({ error: "Daemon already running" }, 400);
     }
+    if (daemonStartInFlight) {
+      return c.json({ error: "Daemon start already in progress" }, 409);
+    }
+    daemonStartInFlight = new Promise<void>((resolve) => {
+      daemonStartResolve = resolve;
+    });
     try {
       const currentConfig = await loadCurrentProjectConfig();
       const scheduler = new Scheduler({
@@ -4485,6 +4614,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         },
       });
       schedulerInstance = scheduler;
+      settleDaemonStart();
       broadcast("daemon:started", {});
       void scheduler.start().catch((e) => {
         const error = e instanceof Error ? e : new Error(String(e));
@@ -4497,11 +4627,16 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       });
       return c.json({ ok: true, running: true });
     } catch (e) {
+      settleDaemonStart();
       return c.json({ error: String(e) }, 500);
     }
   });
 
-  app.post("/api/v1/daemon/stop", (c) => {
+  app.post("/api/v1/daemon/stop", async (c) => {
+    // 等正在进行的 start 结束，避免 stop 落在"guard 已过、Scheduler 还没建好"的窗口
+    if (daemonStartInFlight) {
+      await daemonStartInFlight;
+    }
     if (!schedulerInstance?.isRunning) {
       return c.json({ error: "Daemon not running" }, 400);
     }
@@ -4704,6 +4839,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   app.get("/api/v1/sessions/:sessionId", async (c) => {
     const sessionId = c.req.param("sessionId");
+    assertSafeSessionId(sessionId);
     const session = await loadBookSession(root, sessionId);
     if (!session) return c.json({ error: "Session not found" }, 404);
     const task = await loadReconciledTaskSnapshot(sessionId);
@@ -4720,7 +4856,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const playMode = normalizeStudioPlayMode((body as { playMode?: unknown }).playMode);
     const sessionId = (body as { sessionId?: string }).sessionId;
     // sessionId 只允许 timestamp-random 格式；防止注入任意文件名
-    const safeSessionId = sessionId && /^[0-9]+-[a-z0-9]+$/.test(sessionId) ? sessionId : undefined;
+    const safeSessionId = sessionId && SAFE_SESSION_ID_RE.test(sessionId) ? sessionId : undefined;
     const session = await createAndPersistBookSession(
       root,
       bookId,
@@ -4740,6 +4876,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     if (!playMode) {
       throw new ApiError(400, "INVALID_PLAY_MODE", "playMode is required");
     }
+    assertSafeSessionId(c.req.param("sessionId"));
     const existing = await loadBookSession(root, c.req.param("sessionId"));
     if (!existing) return c.json({ error: "Session not found" }, 404);
     const session = await createAndPersistBookSession(
@@ -4754,6 +4891,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   app.put("/api/v1/sessions/:sessionId", async (c) => {
     const sessionId = c.req.param("sessionId");
+    assertSafeSessionId(sessionId);
     const body = await c.req.json<{ title?: string }>().catch(() => ({}) as { title?: string });
     const title = body.title?.trim();
     if (!title) {
@@ -4769,6 +4907,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   app.delete("/api/v1/sessions/:sessionId", async (c) => {
     const sessionId = c.req.param("sessionId");
+    assertSafeSessionId(sessionId);
     // 先标记删除，再中止任务：任务被中止后的错误持久化会检查这个标记，
     // 不会把已删除会话的快照文件重建出来。
     deletedSessionIds.add(sessionId);
@@ -4783,6 +4922,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   app.post("/api/v1/sessions/:sessionId/abort", async (c) => {
     const sessionId = c.req.param("sessionId");
+    assertSafeSessionId(sessionId);
     // scope=chat 只中止当前聊天轮（agent loop），不动后台生产任务的控制器；
     // 默认 all 维持旧行为：聊天轮和生产任务一起停。
     const body = await c.req.json<{ scope?: unknown }>().catch(() => ({} as { scope?: unknown }));
@@ -4813,6 +4953,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       playMode: reqPlayMode,
       model: reqModel,
       service: reqService,
+      confirmToken: reqConfirmToken,
     } = await c.req.json<{
       instruction: string;
       activeBookId?: string;
@@ -4827,6 +4968,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       playMode?: string;
       model?: string;
       service?: string;
+      confirmToken?: string;
     }>();
     const sessionId = reqSessionId;
     if (!instruction?.trim()) {
@@ -4835,6 +4977,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     if (!sessionId?.trim()) {
       throw new ApiError(400, "SESSION_ID_REQUIRED", "sessionId is required");
     }
+    assertSafeSessionId(sessionId);
     const language = await currentProjectLanguage();
     if (reqModel && !isTextChatModelId(reqModel)) {
       const message = nonTextModelMessage(reqModel, language);
@@ -4921,11 +5064,11 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
       const externalEdit = requestedIntent === "edit_artifact" || sessionKind === "edit"
         ? await tryHandleExternalChatEdit({
-            root,
-            state,
-            instruction,
-            activeBookId: agentBookId,
-          })
+          root,
+          state,
+          instruction,
+          activeBookId: agentBookId,
+        })
         : null;
       if (externalEdit) {
         await appendSessionMessagesUnlessDeleted(root, bookSession.sessionId, [{
@@ -5054,14 +5197,14 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       // Let createLLMClient resolve baseUrl from the service preset.
       const pipelineClient = (reqService && reqModel && resolvedModel)
         ? createLLMClient({
-            ...config.llm,
-            service: configuredEntry?.service ?? reqService,
-            model: reqModel,
-            apiKey: resolvedApiKey ?? "",
-            ...(configuredEntry?.apiFormat ? { apiFormat: configuredEntry.apiFormat } : {}),
-            ...(configuredEntry?.stream !== undefined ? { stream: configuredEntry.stream } : {}),
-            baseUrl: configuredEntry?.baseUrl ?? "",
-          } as any)
+          ...config.llm,
+          service: configuredEntry?.service ?? reqService,
+          model: reqModel,
+          apiKey: resolvedApiKey ?? "",
+          ...(configuredEntry?.apiFormat ? { apiFormat: configuredEntry.apiFormat } : {}),
+          ...(configuredEntry?.stream !== undefined ? { stream: configuredEntry.stream } : {}),
+          baseUrl: configuredEntry?.baseUrl ?? "",
+        } as any)
         : client;
       // 确认式生产任务的 intent：写下一章的各种触发方式（quick-action 按钮、
       // free-text 明确写章命令、写作指令启发式）统一归一成 write_next，与其它
@@ -5114,6 +5257,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         const taskId = confirmedTaskId;
         const taskController = new AbortController();
         activeConfirmedTasks.set(taskId, taskController);
+        confirmedTaskBookIds.set(taskId, agentBookId ?? null);
+        let settleConfirmedTask: () => void = () => undefined;
+        confirmedTaskSettles.set(taskId, () => settleConfirmedTask());
         let pendingBookId: string | null = null;
         try {
           // 预留成功后再走快照检查：本进程的任务都会占预留名额，这里防的是
@@ -5122,6 +5268,21 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           const runningTask = await findActiveRunningTask(bookSession.sessionId);
           if (runningTask) {
             return productionTaskBusyResponse();
+          }
+
+          // 确认门槛：button/slash 确认（带 requestedIntent）必须带回服务器在
+          // 真实 propose_action 提案时签发的单次令牌。纯参数伪造的"确认"请求
+          // 在这里被挡下，不会直接执行生产动作。quick-action / free-text 的
+          // write_next 不属于提案确认（用户已在聊天里直接表达意图），不走令牌。
+          // 放 409 检查之后：任务名额是更严格的前置条件，先于令牌失败。
+          const needsConfirmationToken = (actionSource === "button" || actionSource === "slash")
+            && requestedIntent !== undefined;
+          if (needsConfirmationToken && !consumeConfirmToken(sessionId, requestedIntent, reqConfirmToken)) {
+            throw new ApiError(
+              400,
+              "CONFIRMATION_REQUIRED",
+              "This production action requires a confirmation token from the current proposal. Re-run the proposal and confirm it again.",
+            );
           }
 
           pendingBookId = confirmedIntent === "create_book" && actionPayload?.createBook?.title
@@ -5209,6 +5370,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
             },
           });
         } catch (error) {
+          if (error instanceof ApiError) {
+            throw error;
+          }
           const message = error instanceof Error ? error.message : String(error);
           const failure = formatAgentActionFailure(message, surfaceLanguage);
           if (pendingBookId) {
@@ -5234,6 +5398,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           }, failure.status);
         } finally {
           activeConfirmedTasks.delete(taskId);
+          confirmedTaskBookIds.delete(taskId);
+          confirmedTaskSettles.get(taskId)?.();
+          confirmedTaskSettles.delete(taskId);
           reservedProductionSessions.delete(reservedSessionId);
         }
       }
@@ -5257,9 +5424,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           pipeline,
           ...(backgroundTask
             ? {
-                backgroundTaskContext: buildRunningTaskContextBlock(backgroundTask, surfaceLanguage),
-                suppressProductionTools: true,
-              }
+              backgroundTaskContext: buildRunningTaskContextBlock(backgroundTask, surfaceLanguage),
+              suppressProductionTools: true,
+            }
             : {}),
           projectRoot: root,
           bookId: agentBookId,
@@ -5352,6 +5519,13 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
                   }
                 }
               }
+              let confirmToken: string | undefined;
+              if (event.toolName === "propose_action" && !event.isError) {
+                const details = (event.result as { details?: { kind?: string; action?: string } } | undefined)?.details;
+                if (details?.kind === "proposed_action" && typeof details.action === "string") {
+                  confirmToken = issueConfirmToken(streamSessionId, details.action);
+                }
+              }
               broadcast("tool:end", {
                 sessionId: streamSessionId,
                 id: event.toolCallId,
@@ -5359,6 +5533,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
                 result: event.result,
                 details: exec?.details,
                 isError: event.isError,
+                ...(confirmToken ? { confirmToken } : {}),
               });
             }
           },
@@ -5428,6 +5603,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
               sessionKind,
               ...(bookSession.bookId ? { activeBookId: bookSession.bookId } : {}),
             },
+            // refresh 可能重载并替换 bookSession（如 session kind 迁移），token 必须
+            // 按请求原始 sessionId 取，否则单次确认令牌会"丢失"。
+            confirmToken: pendingConfirmTokens.get(streamSessionId)?.token,
             details: { toolExecutions: collectedToolExecs },
           });
         }
@@ -5536,7 +5714,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   // --- Language setup ---
 
   app.post("/api/v1/project/language", async (c) => {
-    const { language } = await c.req.json<{ language: "zh" | "en" }>();
+    const { language } = await c.req.json<{ language: "zh" | "en" | "vi" }>();
     const configPath = join(root, "inkos.json");
     try {
       const raw = await readFile(configPath, "utf-8");
@@ -5938,6 +6116,31 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const id = c.req.param("id");
     const bookDir = state.bookDir(id);
     try {
+      // 中止该书在写的确认式生产任务并等它们退出，避免 runner 的递归 mkdir
+      // 在删除后重建书目录（数据"复活"）；守护进程的在飞周期同样等它落盘。
+      const affected: string[] = [];
+      for (const [taskId, bookId] of confirmedTaskBookIds) {
+        if (bookId === id) {
+          activeConfirmedTasks.get(taskId)?.abort();
+          affected.push(taskId);
+        }
+      }
+      const inFlight = schedulerInstance?.isRunning ? schedulerInstance.waitForIdle() : undefined;
+      await Promise.allSettled([
+        ...affected.map((taskId) => new Promise<void>((resolve) => {
+          const settled = confirmedTaskSettles.get(taskId);
+          if (settled) {
+            const original = settled;
+            confirmedTaskSettles.set(taskId, () => {
+              original();
+              resolve();
+            });
+          } else {
+            resolve();
+          }
+        })),
+        ...(inFlight ? [inFlight] : []),
+      ]);
       const { rm } = await import("node:fs/promises");
       await rm(bookDir, { recursive: true, force: true });
       broadcast("book:deleted", { bookId: id });
@@ -6204,6 +6407,15 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const id = c.req.param("id");
     const { text, splitRegex } = await c.req.json<{ text: string; splitRegex?: string }>();
     if (!text?.trim()) return c.json({ error: "text is required" }, 400);
+    if (splitRegex) {
+      try {
+        const { assertSafeRegexPattern } = await import("@actalk/inkos-core");
+        assertSafeRegexPattern(splitRegex);
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        return c.json({ error: { code: "UNSAFE_SPLIT_REGEX", message } }, 400);
+      }
+    }
 
     broadcast("import:start", { bookId: id, type: "chapters" });
     try {
@@ -6643,9 +6855,17 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       return c.json({ error: { code: "INVALID_ID", message: `invalid translation id: ${id}` } }, 400);
     }
     const body: { format?: "txt" | "md" | "epub"; outputPath?: string } = await c.req.json().catch(() => ({}));
+    const outputPath = body.outputPath;
+    if (outputPath) {
+      const resolvedOutput = resolve(root, outputPath);
+      const rel = relative(resolve(root), resolvedOutput);
+      if (!rel || rel.startsWith("..") || isAbsolute(rel)) {
+        throw new ApiError(400, "UNSUPPORTED_EXPORT_PATH", "Export path must be inside the project root.");
+      }
+    }
     const result = await writeTranslationExport(root, id, {
       format: body.format ?? "md",
-      outputPath: body.outputPath,
+      outputPath,
     });
     return c.json(result);
   });
@@ -6796,8 +7016,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 export async function startStudioServer(
   root: string,
   port = 4567,
-  options?: { readonly staticDir?: string },
+  options?: { readonly staticDir?: string; readonly hostname?: string },
 ): Promise<void> {
+  const hostname = options?.hostname ?? "127.0.0.1";
   const config = await loadProjectConfig(root, { consumer: "studio", requireApiKey: false });
 
   const app = createStudioServer(config, root);
@@ -6841,6 +7062,7 @@ export async function startStudioServer(
     }
   }
 
-  console.log(`InkOS Studio running on http://localhost:${port}`);
-  serve({ fetch: app.fetch, port });
+  const displayHost = hostname === "0.0.0.0" ? "localhost" : hostname;
+  console.log(`InkOS Studio running on http://${displayHost}:${port}`);
+  serve({ fetch: app.fetch, port, hostname });
 }
